@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+@media print {
+  body * { visibility: hidden; }
+  .print-bill, .print-bill * { visibility: visible; }
+  .print-bill { position: absolute; left: 0; top: 0; width: 100%; }
+  @page { size: A4; margin: 15mm; }
+}
