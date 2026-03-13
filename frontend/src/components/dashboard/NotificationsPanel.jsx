@@ -18,7 +18,7 @@ export default function NotificationsPanel() {
   if (notifications.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+    <div className="bg-white rounded-xl border border-slate-100 p-5 shadow-md">
       <h3 className="font-semibold text-gray-800 mb-4">Notifications</h3>
       <ul className="space-y-2">
         {notifications.map((n) => (

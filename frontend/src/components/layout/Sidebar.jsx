@@ -11,8 +11,8 @@ const navItems = [
 
 export default function Sidebar() {
   return (
-    <aside className="w-52 bg-white border-r border-gray-200 min-h-screen flex flex-col">
-      <div className="p-5 border-b border-gray-100">
+    <aside className="w-52 bg-white/95 backdrop-blur-sm border-r border-slate-200/80 min-h-screen flex flex-col shadow-sm">
+      <div className="p-5 border-b border-slate-100">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center">
             <span className="text-white font-bold text-sm">OP</span>

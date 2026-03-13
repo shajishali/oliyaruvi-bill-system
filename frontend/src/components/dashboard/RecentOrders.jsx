@@ -9,7 +9,7 @@ export default function RecentOrders({ bills }) {
 
   if (!bills?.length) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+      <div className="bg-white rounded-xl border border-slate-100 p-5 shadow-md">
         <h3 className="font-semibold text-gray-800 mb-4">Latest Orders</h3>
         <p className="text-gray-500 text-sm">No orders yet.</p>
       </div>
@@ -17,7 +17,7 @@ export default function RecentOrders({ bills }) {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+    <div className="bg-white rounded-xl border border-slate-100 p-5 shadow-md">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-gray-800">Latest Orders</h3>
         <Link to="/billing" className="text-sm text-slate-600 hover:text-slate-800 font-medium">

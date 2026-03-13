@@ -17,7 +17,7 @@ export default function RevenueChart({ data }) {
   const chartData = allData.slice(-range);
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+    <div className="bg-white rounded-xl border border-slate-100 p-5 shadow-md">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-gray-800">Sales Revenue</h3>
         <select

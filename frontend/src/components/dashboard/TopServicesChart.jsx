@@ -14,12 +14,12 @@ export default function TopServicesChart({ data }) {
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+    <div className="bg-white rounded-xl border border-slate-100 p-5 shadow-md">
       <h3 className="font-semibold text-gray-800 mb-4">Service Breakdown</h3>
       <div className="space-y-3">
         {items.length > 0 ? (
           items.map((item, i) => (
-            <div key={i} className={`flex items-center gap-3 p-3 rounded-lg ${i === 0 ? 'bg-slate-700 text-white' : 'bg-gray-50'}`}>
+            <div key={i} className={`flex items-center gap-3 p-3 rounded-lg transition-colors ${i === 0 ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-50 hover:bg-slate-100'}`}>
               <span className="text-lg">{typeIcons[item.type] || '📦'}</span>
               <div className="flex-1 min-w-0">
                 <p className={`font-medium truncate ${i === 0 ? 'text-white' : 'text-gray-800'}`}>{item.name}</p>
