@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
+const { log } = require('../lib/activityLog');
 
 router.get('/', (req, res) => {
   try {
@@ -25,6 +26,7 @@ router.put('/', (req, res) => {
       WHERE id = 1
     `).run(shop_name, address, contact, gstin);
     const updated = db.prepare('SELECT * FROM shop_settings WHERE id = 1').get();
+    log('settings_updated', 'settings', 1, { shop_name: updated.shop_name });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });

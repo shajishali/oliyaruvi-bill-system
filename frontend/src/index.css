@@ -2,9 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Improve button click responsiveness - reduce 300ms tap delay, ensure pointer works */
+button, [role="button"] {
+  touch-action: manipulation;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+button:disabled, [role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+:root {
+  --theme-primary: #dc2626;   /* red-600 */
+  --theme-primary-hover: #b91c1c; /* red-700 */
+  --theme-dark: #0a0a0a;     /* black */
+  --theme-dark-hover: #1a0a0a; /* red-tinted black */
+}
+
+select option {
+  background: #0a0a0a;
+  color: #fff;
+}
+
 body {
   @apply text-gray-900 antialiased;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background: url('/dashboard-bg.png') center center / cover no-repeat fixed;
   min-height: 100vh;
 }
 

@@ -192,4 +192,23 @@ billingSystem/
 
 ---
 
+## Reset Database (Remove Example Data)
+
+To clear all example frame/photo sizes and start fresh:
+
+1. **Stop the backend** (Ctrl+C in the terminal running `npm start`)
+2. Run: `cd backend && npm run reset-db`
+3. **Restart the backend**: `npm start`
+
+## Add Item Returns "Not found"?
+
+If the Add Frame/Photo button shows "Not found", it means the backend needs to be restarted to load the latest code:
+
+1. **Stop the backend** (Ctrl+C in the terminal)
+2. **Start it again**: `cd backend && npm start`
+
+Or use: `cd backend && npm run restart` to stop and restart automatically.
+
+---
+
 *Document Version: 1.0*
