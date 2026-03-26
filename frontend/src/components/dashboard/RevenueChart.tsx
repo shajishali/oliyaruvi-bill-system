@@ -1,13 +1,30 @@
-import { useState } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useState, useRef, useEffect } from 'react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import type { RevenueTrendPoint } from '../../types';
 
 interface RevenueChartProps {
   data: RevenueTrendPoint[];
 }
 
+const CHART_HEIGHT = 224;
+
 export default function RevenueChart({ data }: RevenueChartProps) {
   const [range, setRange] = useState(7);
+  const [width, setWidth] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const updateWidth = () => {
+      const w = el.offsetWidth;
+      if (w > 0) setWidth(w);
+    };
+    updateWidth();
+    const ro = new ResizeObserver(updateWidth);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const formatDate = (d: string) => {
     const date = new Date(d);
@@ -22,7 +39,7 @@ export default function RevenueChart({ data }: RevenueChartProps) {
   const chartData = allData.slice(-range);
 
   return (
-    <div className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-5 shadow-xl">
+    <div className="min-w-0 bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-5 shadow-xl">
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-white">Sales Revenue</h3>
         <select
@@ -35,10 +52,9 @@ export default function RevenueChart({ data }: RevenueChartProps) {
           <option value={30}>30 days</option>
         </select>
       </div>
-      <div className="h-56">
-        {chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+      <div ref={containerRef} className="w-full min-w-0" style={{ height: CHART_HEIGHT, minHeight: 200 }}>
+        {chartData.length > 0 && width > 0 ? (
+          <AreaChart width={width} height={CHART_HEIGHT} data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
               <defs>
                 <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#dc2626" stopOpacity={0.4} />
@@ -56,10 +72,9 @@ export default function RevenueChart({ data }: RevenueChartProps) {
               />
               <Area type="monotone" dataKey="revenue" stroke="#dc2626" strokeWidth={2} fill="url(#colorRevenue)" />
             </AreaChart>
-          </ResponsiveContainer>
-        ) : (
+        ) : chartData.length === 0 ? (
           <div className="flex items-center justify-center h-full text-red-300/70 text-sm">No data for selected period</div>
-        )}
+        ) : null}
       </div>
     </div>
   );

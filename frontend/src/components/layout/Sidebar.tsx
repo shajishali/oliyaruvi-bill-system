@@ -14,8 +14,8 @@ export default function Sidebar() {
     <aside className="w-52 bg-black/90 backdrop-blur-sm border-r border-red-950/60 min-h-screen flex flex-col shadow-xl">
       <div className="p-5 border-b border-red-950/50">
         <div className="flex flex-col items-center gap-2">
-          <img src="/logo.png" alt="OLLIYARUVI PRINTERS" className="h-14 w-auto object-contain" />
-          <h1 className="font-semibold text-white text-center text-sm uppercase tracking-wide">OLLIYARUVI PRINTERS</h1>
+          <img src={`${import.meta.env.BASE_URL}logo.jpeg`} alt="OLIYARUVI PRINTERS" className="h-14 w-auto object-contain" />
+          <h1 className="font-semibold text-white text-center text-sm uppercase tracking-wide">OLIYARUVI PRINTERS</h1>
         </div>
       </div>
       <nav className="flex-1 p-3 space-y-0.5">

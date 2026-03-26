@@ -1,7 +1,25 @@
 /** Normalize size string for display: use x instead of + (e.g. 8+6 → 8x6) */
 export function formatSizeDisplay(size: string | undefined | null): string {
   if (!size) return '';
-  return String(size).replace(/\+/g, 'x');
+  let s = String(size).replace(/\+/g, 'x');
+
+  // Some catalog entries store a full label like "plastic momento 10 inches".
+  // For bill printing we want to show only the measurement part: "10 inches".
+  // We only apply this trimming when the string contains inch/feet markers to avoid
+  // breaking values like "A4" or "8x6".
+  if (/\b(inches?|ft|feet)\b/i.test(s) && /\d+(?:\.\d+)?/.test(s)) {
+    const m = s.match(/(\d+(?:\.\d+)?[\s\S]*)/);
+    if (m?.[1]) return m[1].trim().replace(/\s+/g, ' ');
+  }
+
+  // Some catalog entries store both name + dimension in the same field (e.g. "round 34X65").
+  // For the Size column we want only the "34X65" part.
+  const xDim = s.match(/(\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?)/);
+  if (xDim?.[1]) {
+    return xDim[1].trim().replace(/\s*[xX]\s*/g, 'X');
+  }
+
+  return s;
 }
 
 /** Parse size dimensions - accepts both + and x (e.g. 8+6, 8x6, 5×3) */
@@ -15,6 +33,17 @@ export function parseSizeDimensions(size: string | undefined | null): [number, n
 export function normalizeSizeForSave(size: string | undefined | null): string {
   if (!size) return '';
   return String(size).trim().replace(/\+/g, 'x');
+}
+
+/** Match backend `normalizeRollWidth`: store bare width number (e.g. "6 feet" → "6"). */
+export function normalizeRollWidthForSave(raw: string | undefined | null): string {
+  const s = String(raw ?? '')
+    .trim()
+    .replace(/\s*feet?\s*/gi, '')
+    .replace(/\s*ft\s*/gi, '')
+    .trim();
+  const n = parseFloat(s);
+  return isNaN(n) ? s : String(n);
 }
 
 /** Extract first number from size (e.g. "6 ft", "6 X 10" → 6). Used for stock lookup. */

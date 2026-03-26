@@ -20,7 +20,7 @@ router.put('/:id/pay-balance', (req, res) => {
       db.prepare(`
         INSERT INTO payment_transactions (bill_id, amount, paid_at, payment_method, payment_type)
         VALUES (?, ?, ?, ?, 'balance')
-      `).run(bill.id, payAmount, today, method);
+      `).run(bill.id, payAmount, today, method === 'Bank' ? 'Bank' : 'Cash');
     } catch (_) { /* table may not exist yet */ }
     log('bill_balance_paid', 'bill', bill.id, { bill_number: bill.bill_number, amount: payAmount });
     const updated = db.prepare('SELECT * FROM bills WHERE id = ?').get(bill.id);
@@ -122,6 +122,7 @@ router.post('/', (req, res) => {
 
     const reduceFrameStock = db.prepare('UPDATE frame_sizes SET stock_qty = stock_qty - ? WHERE id = ?');
     const reducePhotoStock = db.prepare('UPDATE photo_sizes SET stock_qty = stock_qty - ? WHERE id = ?');
+    const reducePhotocopyStock = db.prepare('UPDATE photocopy_sizes SET stock_qty = stock_qty - ? WHERE id = ?');
     const logStockTx = db.prepare(`
       INSERT INTO stock_transactions (item_type, item_id, transaction_type, quantity, previous_qty, new_qty, reason, user_action)
       VALUES (?, ?, 'reduce', ?, ?, ?, ?, 'billing')
@@ -162,6 +163,16 @@ router.post('/', (req, res) => {
             logStockTx.run('photo', item.photo_id, qty, photo.stock_qty, updated.stock_qty, `Bill #${bill_number}`);
           }
         }
+        // Photocopy: simple qty decrease
+        if (item.service_type === 'photocopy' && item.photocopy_id) {
+          const photocopy = db.prepare('SELECT stock_qty FROM photocopy_sizes WHERE id = ?').get(item.photocopy_id);
+          if (photocopy) {
+            const qty = item.quantity || 1;
+            reducePhotocopyStock.run(qty, item.photocopy_id);
+            const updated = db.prepare('SELECT stock_qty FROM photocopy_sizes WHERE id = ?').get(item.photocopy_id);
+            logStockTx.run('photocopy', item.photocopy_id, qty, photocopy.stock_qty, updated.stock_qty, `Bill #${bill_number}`);
+          }
+        }
         // Banners: identify roll by first number (width ft, e.g. 6ft/8ft), decrease length by sqft/width
         if ((item.service_type === 'banner_roll' || item.service_type === 'banner') && item.metadata) {
           const meta = typeof item.metadata === 'string' ? JSON.parse(item.metadata) : item.metadata;
@@ -174,14 +185,18 @@ router.post('/', (req, res) => {
           }
           widthFt = widthFt > 0 ? widthFt : 6;
           if (bannerStockId) {
-            const sqft = parseFloat(item.quantity) || 0;
-            const feetUsed = widthFt > 0 ? sqft / widthFt : 0;
-            const banner = db.prepare('SELECT feet_remaining FROM banner_stock WHERE id = ?').get(bannerStockId);
-            if (banner) {
-              const prevFeet = banner.feet_remaining ?? 0;
-              const newFeet = Math.max(0, prevFeet - feetUsed);
-              db.prepare('UPDATE banner_stock SET feet_remaining = ?, stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newFeet, Math.ceil(newFeet / 150), bannerStockId);
-              logStockTx.run('banner', bannerStockId, Math.round(feetUsed * 100) / 100, prevFeet, newFeet, `Bill #${bill_number}`);
+            if (meta.pricing_unit === 'per_qty') {
+              // Rs/unit line: do not deduct roll length from physical stock
+            } else {
+              const sqft = parseFloat(item.quantity) || 0;
+              const feetUsed = widthFt > 0 ? sqft / widthFt : 0;
+              const banner = db.prepare('SELECT feet_remaining FROM banner_stock WHERE id = ?').get(bannerStockId);
+              if (banner) {
+                const prevFeet = banner.feet_remaining ?? 0;
+                const newFeet = Math.max(0, prevFeet - feetUsed);
+                db.prepare('UPDATE banner_stock SET feet_remaining = ?, stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newFeet, Math.ceil(newFeet / 150), bannerStockId);
+                logStockTx.run('banner', bannerStockId, Math.round(feetUsed * 100) / 100, prevFeet, newFeet, `Bill #${bill_number}`);
+              }
             }
           }
         }
@@ -208,6 +223,39 @@ router.post('/', (req, res) => {
             }
           }
         }
+        // Custom section items (e.g. stamp printing)
+        // Only reduce stock if section affects_sales (maintenance sections like ink do not reduce on billing)
+        if (item.service_type === 'custom' && item.metadata) {
+          const meta = typeof item.metadata === 'string' ? JSON.parse(item.metadata) : item.metadata;
+          const customItemId = meta.custom_item_id;
+          if (customItemId) {
+            const customRow = db.prepare('SELECT css.*, cs.section_type, COALESCE(cs.affects_sales, 1) as affects_sales FROM custom_section_stock css JOIN custom_sections cs ON css.section_id = cs.section_id WHERE css.id = ?').get(customItemId);
+            if (customRow && customRow.affects_sales) {
+              const qty = item.quantity || 1;
+              if (customRow.section_type === 'roll') {
+                let widthFt = meta.width_ft;
+                if (widthFt == null || widthFt <= 0) {
+                  const sizeStr = String(item.size || customRow.size_name || '');
+                  const m = sizeStr.match(/(\d+(?:\.\d+)?)\s*ft/i) || sizeStr.match(/(\d+)/);
+                  widthFt = m ? parseFloat(m[1]) : 6;
+                }
+                widthFt = widthFt > 0 ? widthFt : 6;
+                const sqft = parseFloat(item.quantity) || 0;
+                const feetUsed = widthFt > 0 ? sqft / widthFt : 0;
+                const feetRemaining = (customRow.feet_remaining ?? (customRow.stock_qty ?? 0) * 150);
+                const newFeet = Math.max(0, feetRemaining - feetUsed);
+                const newStockQty = Math.ceil(newFeet / 150);
+                db.prepare('UPDATE custom_section_stock SET stock_qty = ?, feet_remaining = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newStockQty, newFeet, customItemId);
+                logStockTx.run('custom', customItemId, Math.round(feetUsed * 100) / 100, feetRemaining, newFeet, `Bill #${bill_number}`);
+              } else {
+                const prevQty = customRow.stock_qty ?? 0;
+                const newQty = Math.max(0, prevQty - qty);
+                db.prepare('UPDATE custom_section_stock SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, customItemId);
+                logStockTx.run('custom', customItemId, qty, prevQty, newQty, `Bill #${bill_number}`);
+              }
+            }
+          }
+        }
       }
 
       const total = Math.max(0, subtotal - discount);
@@ -215,12 +263,15 @@ router.post('/', (req, res) => {
       db.prepare('UPDATE bills SET subtotal = ?, total = ?, amount_paid = ? WHERE id = ?').run(subtotal, total, advance, billId);
 
       if (advance > 0) {
+        const method = (payment_method || 'Cash').toString().toLowerCase() === 'bank' ? 'Bank' : 'Cash';
         try {
           db.prepare(`
             INSERT INTO payment_transactions (bill_id, amount, paid_at, payment_method, payment_type)
             VALUES (?, ?, ?, ?, 'advance')
-          `).run(billId, advance, bill_date, payment_method, 'advance');
-        } catch (_) { /* table may not exist yet */ }
+          `).run(billId, advance, bill_date, method, 'advance');
+        } catch (err) {
+          console.error('payment_transactions insert failed:', err.message);
+        }
       }
 
       return { id: billId, bill_number, bill_date };
@@ -235,6 +286,115 @@ router.post('/', (req, res) => {
       payment_transactions = db.prepare('SELECT amount, paid_at, payment_method, payment_type FROM payment_transactions WHERE bill_id = ? ORDER BY paid_at, id').all(created.id);
     } catch (_) { /* table may not exist */ }
     res.status(201).json({ ...bill, items: billItems, payment_transactions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE bill with rollback (stock + payment records)
+router.delete('/:id', (req, res) => {
+  try {
+    const billId = parseInt(req.params.id);
+    if (!Number.isFinite(billId)) return res.status(400).json({ error: 'Invalid bill id' });
+
+    const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(billId);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+    const billNumber = bill.bill_number;
+    const reduceReason = `Bill #${billNumber}`;
+
+    db.transaction(() => {
+      // 1) Roll back stock using the original billing reductions
+      const reduceTx = db.prepare(
+        `SELECT * FROM stock_transactions
+         WHERE reason = ?
+           AND user_action = 'billing'
+           AND transaction_type = 'reduce'
+        `
+      ).all(reduceReason);
+
+      const logAddTx = db.prepare(`
+        INSERT INTO stock_transactions (item_type, item_id, transaction_type, quantity, previous_qty, new_qty, reason, user_action)
+        VALUES (?, ?, 'add', ?, ?, ?, ?, 'billing')
+      `);
+
+      for (const tx of reduceTx) {
+        const itemType = tx.item_type;
+        const itemId = tx.item_id;
+        // For reduce tx rows, previous_qty/new_qty represent the exact change applied to stock.
+        // Using their difference avoids drift from any rounding done when writing tx.quantity.
+        const prevLogged = Number(tx.previous_qty ?? 0);
+        const newLogged = Number(tx.new_qty ?? 0);
+        const delta = prevLogged - newLogged;
+        if (!Number.isFinite(delta) || delta === 0) continue;
+
+        if (itemType === 'frame') {
+          const row = db.prepare('SELECT stock_qty FROM frame_sizes WHERE id = ?').get(itemId);
+          if (!row) continue;
+          const prevQty = Number(row.stock_qty || 0);
+          const newQty = prevQty + delta;
+          db.prepare('UPDATE frame_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, itemId);
+          logAddTx.run('frame', itemId, delta, prevQty, newQty, `Undo delete ${reduceReason}`);
+        }
+
+        if (itemType === 'photo') {
+          const row = db.prepare('SELECT stock_qty FROM photo_sizes WHERE id = ?').get(itemId);
+          if (!row) continue;
+          const prevQty = Number(row.stock_qty || 0);
+          const newQty = prevQty + delta;
+          db.prepare('UPDATE photo_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, itemId);
+          logAddTx.run('photo', itemId, delta, prevQty, newQty, `Undo delete ${reduceReason}`);
+        }
+
+        if (itemType === 'photocopy') {
+          const row = db.prepare('SELECT stock_qty FROM photocopy_sizes WHERE id = ?').get(itemId);
+          if (!row) continue;
+          const prevQty = Number(row.stock_qty || 0);
+          const newQty = prevQty + delta;
+          db.prepare('UPDATE photocopy_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, itemId);
+          logAddTx.run('photocopy', itemId, delta, prevQty, newQty, `Undo delete ${reduceReason}`);
+        }
+
+        if (itemType === 'banner') {
+          const row = db.prepare('SELECT feet_remaining FROM banner_stock WHERE id = ?').get(itemId);
+          if (!row) continue;
+          const prevFeet = Number(row.feet_remaining ?? 0);
+          const newFeet = prevFeet + delta;
+          const newStockQty = Math.ceil(newFeet / 150);
+          db.prepare('UPDATE banner_stock SET feet_remaining = ?, stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newFeet, newStockQty, itemId);
+          logAddTx.run('banner', itemId, delta, prevFeet, newFeet, `Undo delete ${reduceReason}`);
+        }
+
+        if (itemType === 'sticker') {
+          const row = db.prepare('SELECT feet_remaining FROM sticker_stock WHERE id = ?').get(itemId);
+          if (!row) continue;
+          const prevFeet = Number(row.feet_remaining ?? 0);
+          const newFeet = prevFeet + delta;
+          const newStockQty = Math.ceil(newFeet / 150);
+          db.prepare('UPDATE sticker_stock SET feet_remaining = ?, stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newFeet, newStockQty, itemId);
+          logAddTx.run('sticker', itemId, delta, prevFeet, newFeet, `Undo delete ${reduceReason}`);
+        }
+      }
+
+      // 2) Remove payment records (payment_transactions references bills without ON DELETE CASCADE)
+      db.prepare('DELETE FROM payment_transactions WHERE bill_id = ?').run(billId);
+
+      // 3) Remove the original billing reduce stock logs for this bill
+      db.prepare(
+        `DELETE FROM stock_transactions
+         WHERE reason = ?
+           AND user_action = 'billing'
+           AND transaction_type = 'reduce'
+        `
+      ).run(reduceReason);
+
+      // 4) Delete the bill itself (bill_items will be removed via ON DELETE CASCADE)
+      db.prepare('DELETE FROM bills WHERE id = ?').run(billId);
+
+      log('bill_deleted', 'bill', billId, { bill_number: billNumber });
+    })();
+
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

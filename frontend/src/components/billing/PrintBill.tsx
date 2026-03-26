@@ -49,23 +49,63 @@ const THERMAL_STYLES = `
   .total-row { font-size: 12px; font-weight: bold; margin: 4px 0; }
 `;
 
+function parseItemMetadata(item: BillItem): Record<string, unknown> | null {
+  const raw = (item as { metadata?: unknown }).metadata;
+  if (raw == null) return null;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  return null;
+}
+
+function formatBillUnitPriceCell(item: BillItem): string {
+  const p = parseFloat(String(item.unit_price)).toFixed(2);
+  const st = (item as { service_type?: string }).service_type;
+  if (st !== 'manual') return `Rs.${p}`;
+  const meta = parseItemMetadata(item);
+  const pu = meta?.pricing_unit;
+  if (pu === 'per_sqft') return `Rs.${p}/sqft`;
+  if (pu === 'per_unit') return `Rs.${p}/unit`;
+  return `Rs.${p}`;
+}
+
+function formatItemNameDisplay(itemName: string | undefined | null): string {
+  if (!itemName) return '';
+  const s = String(itemName).trim();
+
+  // If item name contains dimensions like "round 34X65", show only the base item "round".
+  const xDimRegex = /(\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?)/;
+  const idx = s.search(xDimRegex);
+  if (idx < 0) return s;
+
+  const prefix = s.slice(0, idx).trim();
+  return prefix ? prefix : s;
+}
+
 function buildPrintHtml(
   bill: Bill,
   settings: Partial<ShopSettings>,
   format: 'a4' | 'thermal'
 ): string {
-  const shop = settings.shop_name || 'OLLIYARUVI PRINTERS';
+  const shop = settings.shop_name || 'OLIYARUVI PRINTERS';
   const address = settings.address || 'Enter your shop address here';
   const contact = settings.contact || 'Enter contact number';
 
   const rows = (bill.items || []).map(
     (item: BillItem) => {
       const discount = (item as { item_discount?: number }).item_discount ?? item.discount ?? 0;
+      const itemDisplay = formatItemNameDisplay(item.item_name);
+      const sizeDisplay = formatSizeDisplay(item.size) || item.size || '-';
       return `<tr>
-        <td>${item.item_name}</td>
-        <td>${formatSizeDisplay(item.size) || item.size || '-'}</td>
+        <td>${itemDisplay}</td>
+        <td>${sizeDisplay}</td>
         <td class="num">${item.quantity}</td>
-        <td class="num">Rs.${parseFloat(String(item.unit_price)).toFixed(2)}</td>
+        <td class="num">${formatBillUnitPriceCell(item)}</td>
         <td class="num">${discount > 0 ? `-Rs.${discount.toFixed(2)}` : '-'}</td>
         <td class="num">Rs.${parseFloat(String(item.subtotal)).toFixed(2)}</td>
       </tr>`;
@@ -151,7 +191,7 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
   const handlePrint = () => {
     if (printing) return;
     setPrinting(true);
-    const shop = settings.shop_name || 'OLLIYARUVI PRINTERS';
+    const shop = settings.shop_name || 'OLIYARUVI PRINTERS';
     const billToPrint = currentBill;
     const address = settings.address || 'Enter your shop address here';
     const contact = settings.contact || 'Enter contact number';
@@ -173,7 +213,7 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
     }, 300);
   };
 
-  const shop = settings.shop_name || 'OLLIYARUVI PRINTERS';
+  const shop = settings.shop_name || 'OLIYARUVI PRINTERS';
   const address = settings.address || 'Enter your shop address here';
   const contact = settings.contact || 'Enter contact number';
 
@@ -198,8 +238,8 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
                 onChange={(e) => setPrintFormat(e.target.value as 'a4' | 'thermal')}
                 className="h-9 border border-red-900/50 rounded px-3 text-sm bg-black/60 text-white"
               >
-                <option value="a4">A4</option>
-                <option value="thermal">Thermal (80mm)</option>
+                <option value="a4">A4 (Ricoh MPC 355 / office printer)</option>
+                <option value="thermal">Thermal (80mm receipt)</option>
               </select>
             </div>
             <button
@@ -246,12 +286,14 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
               <tbody>
                 {(currentBill.items || []).map((item: BillItem, idx) => {
                   const itemDiscount = (item as { item_discount?: number }).item_discount ?? item.discount ?? 0;
+                  const itemDisplay = formatItemNameDisplay(item.item_name);
+                  const sizeDisplay = formatSizeDisplay(item.size) || item.size || '-';
                   return (
                   <tr key={idx}>
-                    <td className="border p-1.5">{item.item_name}</td>
-                    <td className="border p-1.5">{formatSizeDisplay(item.size) || item.size || '-'}</td>
+                    <td className="border p-1.5">{itemDisplay}</td>
+                    <td className="border p-1.5">{sizeDisplay}</td>
                     <td className="border p-1.5 text-right">{item.quantity}</td>
-                    <td className="border p-1.5 text-right">Rs.{parseFloat(String(item.unit_price)).toFixed(2)}</td>
+                    <td className="border p-1.5 text-right">{formatBillUnitPriceCell(item)}</td>
                     <td className="border p-1.5 text-right">{itemDiscount > 0 ? `-Rs.${itemDiscount.toFixed(2)}` : '-'}</td>
                     <td className="border p-1.5 text-right">Rs.{parseFloat(String(item.subtotal)).toFixed(2)}</td>
                   </tr>

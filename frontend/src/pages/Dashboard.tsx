@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Header from '../components/layout/Header';
 import RevenueCards from '../components/dashboard/RevenueCards';
+import DailyRevenueCard from '../components/dashboard/DailyRevenueCard';
 import RevenueChart from '../components/dashboard/RevenueChart';
 import TopServicesChart from '../components/dashboard/TopServicesChart';
 import RecentOrders from '../components/dashboard/RecentOrders';
@@ -74,6 +75,8 @@ export default function Dashboard() {
           actualByCash={actualByCash}
           actualByBank={actualByBank}
         />
+
+        <DailyRevenueCard />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <RevenueChart data={revenueTrend} />

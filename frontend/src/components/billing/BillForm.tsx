@@ -1,8 +1,10 @@
-import { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../../api/client';
 import type { Bill, BillItem, BillableItem, Customer } from '../../types';
-import { formatSizeDisplay, formatBannerStickerSize, parseSizeDimensions } from '../../utils/sizeFormat';
+import { formatSizeDisplay, parseSizeDimensions } from '../../utils/sizeFormat';
+import { dedupeBillableItems, sameProductGroupForSizePicker } from '../../utils/billableDisplay';
+import { buildBillingPlaceholderOptions } from '../../constants/billingItemPlaceholderAllowlist';
 
 interface BillFormProps {
   onBillCreated: (bill: Bill) => void;
@@ -12,6 +14,8 @@ type BillFormLineItem = BillItem & {
   service_type?: string;
   frame_id?: number;
   photo_id?: number;
+  photocopy_id?: number;
+  metadata?: Record<string, unknown>;
 };
 
 export default function BillForm({ onBillCreated }: BillFormProps) {
@@ -43,6 +47,12 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   const [sizeDropdownOpen, setSizeDropdownOpen] = useState(false);
   const [sizeWidthStr, setSizeWidthStr] = useState('');
   const [sizeLengthStr, setSizeLengthStr] = useState('');
+  /** Free-text size when not using roll dimensions, or override label after picking from list */
+  const [manualSizeInput, setManualSizeInput] = useState('');
+  /** Manual lines only: whether unit price is per sqft or per piece */
+  const [manualPricingUnit, setManualPricingUnit] = useState<'per_sqft' | 'per_unit'>('per_unit');
+  /** Stock row `stock_type` (banner/sticker tabs) — filters roll widths in Size */
+  const [selectedStockTypeKey, setSelectedStockTypeKey] = useState('');
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
   const addRowRef = useRef<HTMLTableRowElement>(null);
   const customerSectionRef = useRef<HTMLDivElement>(null);
@@ -73,6 +83,15 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
 
   useEffect(() => {
     fetchBillableItems();
+  }, []);
+
+  // Re-fetch whenever the tab becomes visible (user switches back from another page/app)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchBillableItems();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   useEffect(() => {
@@ -114,55 +133,117 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     }
   }, [sizeDropdownOpen]);
 
-  // Sync size inputs for banner/sticker when selectedSize or quantity changes
-  useEffect(() => {
-    if (!selectedItem || !selectedSize) {
-      setSizeWidthStr('');
-      setSizeLengthStr('');
-      return;
-    }
-    if (selectedItem.type !== 'banner' && selectedItem.type !== 'banner_roll' && selectedItem.type !== 'sticker_roll') {
-      setSizeWidthStr('');
-      setSizeLengthStr('');
-      return;
-    }
-    const w = selectedSize.widthFt ?? 0;
-    setSizeWidthStr(String(w));
-    const qty = parseFloat(quantity) || 0;
-    setSizeLengthStr(qty > 0 && w > 0 ? String(Math.round((qty / w) * 100) / 100) : String(w));
-  }, [selectedItem?.type, selectedItem, selectedSize?.id, selectedSize?.widthFt, quantity]);
-
   const advanceAmount = parseFloat(advanceStr) || 0;
   const subtotal = items.reduce((sum, i) => sum + (i.subtotal || 0), 0);
   const total = subtotal;
   const advance = Math.min(total, Math.max(0, advanceAmount));
   const balance = total - advance;
 
-  const uniqueItemNames = [...new Set(billableItems.map((i) => i.name))].sort();
-  const filteredItemNames = itemSearch
-    ? uniqueItemNames.filter((n) => n.toLowerCase().includes(itemSearch.toLowerCase()))
-    : uniqueItemNames;
+  /** Item picker lists only catalog rows from Settings / Stock (no “manual” list entries). */
+  const itemListOptions = useMemo(() => buildBillingPlaceholderOptions(billableItems), [billableItems]);
+
+  const filteredItemOptions = useMemo(() => {
+    const q = itemSearch.trim().toLowerCase();
+    if (!q) return itemListOptions;
+    return itemListOptions.filter(
+      (o) => o.label.toLowerCase().includes(q) || o.display.toLowerCase().includes(q)
+    );
+  }, [itemListOptions, itemSearch]);
+
+  const manualEntryActive = !selectedItem && itemSearch.trim().length > 0;
 
   const isBannerOrSticker = (t?: string) =>
     t === 'banner' || t === 'banner_roll' || t === 'sticker_roll';
+  const isBannerOrStickerOrCustomRoll = (t?: string, calcType?: string) =>
+    isBannerOrSticker(t) || (t === 'custom' && calcType === 'sqft_direct');
 
-  const sizesForItem = selectedItem
-    ? billableItems.filter(
-        (i) =>
-          i.type === selectedItem.type &&
-          i.name === selectedItem.name &&
-          (selectedItem.type !== 'banner' && selectedItem.type !== 'banner_roll' && selectedItem.type !== 'sticker_roll' || i.materialId === selectedItem.materialId) &&
-          (selectedItem.type !== 'service' || i.materialId === selectedItem.materialId)
-      )
-    : [];
+  const groupRowsForItem = useMemo(() => {
+    if (!selectedItem) return [];
+    return billableItems.filter((i) => sameProductGroupForSizePicker(selectedItem, i));
+  }, [billableItems, selectedItem]);
+
+  /** Distinct Stock "Type" values (stock_type) for the selected material — from Stock page rows */
+  const stockTypeOptions = useMemo(() => {
+    if (!selectedItem || (selectedItem.type !== 'banner_roll' && selectedItem.type !== 'sticker_roll')) return [];
+    const keys = new Set<string>();
+    for (const r of groupRowsForItem) {
+      if (r.type !== 'banner_roll' && r.type !== 'sticker_roll') continue;
+      keys.add(String(r.stockTypeLabel || '').trim());
+    }
+    return Array.from(keys).sort((a, b) => (a || '\uFFFF').localeCompare(b || '\uFFFF'));
+  }, [groupRowsForItem, selectedItem]);
+
+  const showStockTypeColumn =
+    selectedItem != null &&
+    (selectedItem.type === 'banner_roll' || selectedItem.type === 'sticker_roll') &&
+    stockTypeOptions.length > 0;
+
+  const showTypeCol = useMemo(() => {
+    if (showStockTypeColumn) return true;
+    return items.some((i) => {
+      const m = i.metadata as { stock_type_label?: string } | undefined;
+      return m != null && String(m.stock_type_label || '').trim() !== '';
+    });
+  }, [showStockTypeColumn, items]);
+
+  const sizesForItem = useMemo(() => {
+    if (!selectedItem) return [];
+    const base = dedupeBillableItems(groupRowsForItem);
+    if (!showStockTypeColumn) return base;
+    if (stockTypeOptions.length > 1 && selectedStockTypeKey === '') return [];
+    return dedupeBillableItems(
+      groupRowsForItem.filter((r) => String(r.stockTypeLabel || '').trim() === selectedStockTypeKey)
+    );
+  }, [groupRowsForItem, selectedItem, showStockTypeColumn, stockTypeOptions.length, selectedStockTypeKey]);
+
+  function applyRollSizePick(pick: BillableItem | null) {
+    setSelectedSize(pick);
+    if (pick) {
+      const isRoll =
+        pick.type === 'banner_roll' ||
+        pick.type === 'sticker_roll' ||
+        (pick.type === 'custom' && pick.calcType === 'sqft_direct');
+      if (isRoll) {
+        const w = pick.widthFt ?? 0;
+        const defaultLen = w > 0 ? w : 0;
+        setSizeWidthStr(String(w));
+        setSizeLengthStr(String(defaultLen));
+        setQuantity(
+          w > 0 && defaultLen > 0 ? String(Math.round(w * defaultLen * 100) / 100) : ''
+        );
+      }
+      setUnitPriceStr(
+        pick.calcType === 'sqft' || pick.calcType === 'sqft_direct'
+          ? String(pick.pricePerSqft ?? pick.unitPrice ?? '')
+          : String(pick.unitPrice ?? '')
+      );
+      setManualSizeInput(formatSizeDisplay(pick.sizeName) || pick.sizeName || '');
+    } else {
+      setUnitPriceStr('');
+      setManualSizeInput('');
+      setSizeWidthStr('');
+      setSizeLengthStr('');
+      setQuantity('');
+    }
+  }
 
   const getDefaultUnitPrice = () => {
     if (!selectedSize) return 0;
-    return (selectedSize.calcType === 'sqft' || selectedSize.calcType === 'sqft_direct') ? (selectedSize.pricePerSqft || 0) : (selectedSize.unitPrice || 0);
+    if (selectedSize.calcType === 'sqft' || selectedSize.calcType === 'sqft_direct') {
+      return Number(selectedSize.pricePerSqft ?? selectedSize.unitPrice ?? 0) || 0;
+    }
+    return selectedSize.unitPrice || 0;
   };
 
   const calcSubtotal = () => {
     const qty = parseFloat(String(quantity)) || 0;
+    // Manual line: typed item name, no catalog row — qty × unit price − discount
+    if (!selectedItem && itemSearch.trim()) {
+      if (qty <= 0) return 0;
+      const unitPrice = parseFloat(unitPriceStr) || 0;
+      const itemDiscount = parseFloat(itemDiscountStr) || 0;
+      return Math.max(0, qty * unitPrice - itemDiscount);
+    }
     if (!selectedItem || !selectedSize || qty <= 0) return 0;
     const unitPrice = parseFloat(unitPriceStr) || getDefaultUnitPrice();
     let base = 0;
@@ -184,17 +265,52 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   const currentSubtotal = calcSubtotal();
 
   const addItem = () => {
-    const qty = selectedItem?.calcType === 'sqft_direct' ? parseFloat(String(quantity)) : parseInt(String(quantity)) || 0;
-    if (!selectedItem || !selectedSize || qty <= 0) return;
     const st = calcSubtotal();
     if (st <= 0) return;
 
-    let itemName = `${selectedItem.name}`;
+    const nameManual = itemSearch.trim();
+    if (!selectedItem && nameManual) {
+      const qty = parseFloat(String(quantity)) || 0;
+      const unitPrice = parseFloat(unitPriceStr) || 0;
+      if (qty <= 0 || unitPrice <= 0) return;
+      const itemDiscount = parseFloat(itemDiscountStr) || 0;
+      const newManual: BillFormLineItem = {
+        service_type: 'manual',
+        item_name: nameManual,
+        size: manualSizeInput.trim() || '-',
+        quantity: qty,
+        unit_price: unitPrice,
+        discount: itemDiscount,
+        subtotal: st,
+        metadata: { pricing_unit: manualPricingUnit },
+      };
+      setItems((prev) => [...prev, newManual]);
+      setItemSearch('');
+      setManualSizeInput('');
+      setQuantity('');
+      setUnitPriceStr('');
+      setItemDiscountStr('');
+      setManualPricingUnit('per_unit');
+      return;
+    }
+
+    const qty = selectedItem?.calcType === 'sqft_direct' ? parseFloat(String(quantity)) : parseInt(String(quantity)) || 0;
+    if (!selectedItem || !selectedSize || qty <= 0) return;
+
     const sizeDisplay = formatSizeDisplay(selectedSize.sizeName) || selectedSize.sizeName;
-    if (selectedItem.type === 'banner' || selectedItem.type === 'banner_roll') itemName = `Banner ${selectedSize.materialName || ''}`;
-    else if (selectedItem.type === 'sticker_roll') itemName = `Sticker ${selectedSize.materialName || ''}`;
-    else if (selectedItem.type === 'service') itemName = selectedItem.name;
-    else itemName = `${selectedItem.name} ${sizeDisplay}`;
+    const labelFromApi = selectedSize.itemLabel?.trim();
+    let itemName: string;
+    if (labelFromApi) {
+      itemName = labelFromApi;
+    } else if (selectedItem.type === 'banner' || selectedItem.type === 'banner_roll') {
+      itemName = selectedSize.materialName || selectedItem.name;
+    } else if (selectedItem.type === 'sticker_roll') {
+      itemName = selectedSize.materialName || selectedItem.name;
+    } else if (selectedItem.type === 'service' || selectedItem.type === 'service_item') {
+      itemName = selectedItem.name;
+    } else {
+      itemName = `${selectedItem.name} ${sizeDisplay}`;
+    }
 
     const itemDiscount = parseFloat(itemDiscountStr) || 0;
     const unitPrice = parseFloat(unitPriceStr) || getDefaultUnitPrice();
@@ -217,14 +333,39 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     const widthFt = selectedSize.widthFt;
 
     const editedWidth = parseFloat(sizeWidthStr) || widthFt;
-    let metadata: { banner_stock_id?: number; sticker_stock_id?: number; width_ft?: number } | undefined;
-    if (selectedItem.type === 'banner_roll' && bannerStockId) metadata = { banner_stock_id: bannerStockId, width_ft: editedWidth };
-    else if (selectedItem.type === 'sticker_roll' && stickerStockId) metadata = { sticker_stock_id: stickerStockId, width_ft: editedWidth };
+    let metadata: { banner_stock_id?: number; sticker_stock_id?: number; width_ft?: number; custom_item_id?: number } | undefined;
+    if (selectedItem.type === 'banner_roll' && bannerStockId) {
+      metadata = {
+        banner_stock_id: bannerStockId,
+        width_ft: editedWidth,
+        ...(selectedItem.calcType === 'fixed' ? { pricing_unit: 'per_qty' as const } : {}),
+        ...(String(selectedSize.stockTypeLabel || '').trim()
+          ? { stock_type_label: String(selectedSize.stockTypeLabel || '').trim() }
+          : {}),
+      };
+    }
+    else if (selectedItem.type === 'sticker_roll' && stickerStockId) {
+      metadata = {
+        sticker_stock_id: stickerStockId,
+        width_ft: editedWidth,
+        ...(String(selectedSize.stockTypeLabel || '').trim()
+          ? { stock_type_label: String(selectedSize.stockTypeLabel || '').trim() }
+          : {}),
+      };
+    }
 
     const sizeForRow =
-      isBannerOrSticker(selectedItem.type) && selectedSize
+      isBannerOrStickerOrCustomRoll(selectedItem.type, selectedItem.calcType) && selectedSize
         ? `${parseFloat(sizeWidthStr) || selectedSize.widthFt || 0} X ${parseFloat(sizeLengthStr) || (qty / (selectedSize.widthFt || 1) || 0)}`
-        : formatSizeDisplay(selectedSize.sizeName) || selectedSize.sizeName;
+        : manualSizeInput.trim() || formatSizeDisplay(selectedSize.sizeName) || selectedSize.sizeName;
+
+    const customItemId = (selectedSize as { customItemId?: number | null }).customItemId;
+    if (selectedItem.type === 'custom' && customItemId != null) {
+      metadata = { ...metadata, custom_item_id: customItemId };
+      if (selectedItem.calcType === 'sqft_direct') {
+        metadata.width_ft = parseFloat(sizeWidthStr) || selectedSize.widthFt || 6;
+      }
+    }
 
     const newItem: BillFormLineItem = {
       service_type: selectedItem.type,
@@ -234,17 +375,20 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
       unit_price: selectedItem.calcType === 'sqft_direct' ? unitPrice : basePrice,
       discount: itemDiscount,
       subtotal: st,
-      frame_id: selectedItem.type === 'frame' ? selectedSize.sizeId : undefined,
+      frame_id: selectedItem.type === 'frame' ? (selectedSize.frameId ?? undefined) : undefined,
       photo_id: selectedItem.type === 'photo' ? selectedSize.sizeId : undefined,
+      photocopy_id: selectedItem.type === 'photocopy' ? selectedSize.sizeId : undefined,
       metadata,
     };
 
     setItems((prev) => [...prev, newItem]);
     setSelectedItem(null);
     setSelectedSize(null);
+    setSelectedStockTypeKey('');
     setQuantity('');
     setSizeWidthStr('');
     setSizeLengthStr('');
+    setManualSizeInput('');
     setUnitPriceStr('');
     setItemDiscountStr('');
     setItemSearch('');
@@ -354,6 +498,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                     if (!selectedCustomer) setCustomerName(e.target.value);
                   }}
                   onFocus={() => setSelectedCustomer(null)}
+                  onBlur={() => setTimeout(() => setCustomers([]), 150)}
                   placeholder="Search or enter name"
                   className="w-full border border-red-900/50 rounded-lg px-3 py-1.5 text-sm bg-black/60 text-white placeholder-red-400/50"
                 />
@@ -362,10 +507,12 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                     {customers.map((c) => (
                       <li
                         key={c.id}
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setSelectedCustomer(c);
                           setCustomerName(c.name);
                           setCustomerSearch('');
+                          setCustomers([]);
                         }}
                         className="px-3 py-2 hover:bg-red-950/50 cursor-pointer text-white text-sm"
                       >
@@ -420,22 +567,46 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
             </button>
           )}
         </div>
-        <p className="text-xs text-red-300/70 mb-2">Click Item → Size → Qty to add. Select from dropdowns.</p>
+        <p className="text-xs text-red-300/70 mb-2">
+          Pick from the lists when available, or type item and size manually. For manual lines, choose <strong className="text-red-200/90">Rs./sqft</strong> or{' '}
+          <strong className="text-red-200/90">Rs./unit</strong>, then qty and rate, then Add.
+        </p>
+        {(selectedItem?.type === 'banner_roll' || selectedItem?.type === 'sticker_roll') && (
+          <p className="text-xs text-amber-200/85 mb-2 rounded border border-amber-900/40 bg-amber-950/25 px-2 py-1.5">
+            <span className="font-medium text-amber-100/95">Banner / sticker rolls:</span>{' '}
+            <strong className="text-white">Item</strong> is the material rate from Settings.{' '}
+            <strong className="text-white">Type</strong> is the physical stock type from the Stock page (e.g. normal, backlight).{' '}
+            <strong className="text-white">Size</strong> is the roll width and length for that type.
+          </p>
+        )}
 
         <div className="border border-red-950/40 rounded-lg overflow-hidden">
           <div className="max-h-[240px] overflow-y-auto overflow-x-auto">
-            <table className="w-full border-collapse min-w-[640px]">
+            <table className="w-full border-collapse min-w-[720px]">
               <thead className="sticky top-0 bg-red-950/50 z-10">
                 <tr>
                   <th className="text-left p-2 border border-red-950/50 text-red-200 text-xs">Item</th>
-                  <th className="text-left p-2 border border-red-950/50 text-red-200 text-xs">Size</th>
-                  {isBannerOrSticker(selectedItem?.type) && (
+                  {showTypeCol && (
+                    <th className="text-left p-2 border border-red-950/50 text-red-200 text-xs">Type</th>
+                  )}
+                  <th className="text-left p-2 border border-red-950/50 text-red-200 text-xs">
+                    {selectedItem?.type === 'banner_roll' || selectedItem?.type === 'sticker_roll' ? 'Roll width' : 'Size'}
+                  </th>
+                  {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && (
                     <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">Sqft available</th>
                   )}
                   <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">
-                    {isBannerOrSticker(selectedItem?.type) ? 'Qty(sqft)' : 'Qty'}
+                    {manualEntryActive
+                      ? manualPricingUnit === 'per_sqft'
+                        ? 'Qty (sqft)'
+                        : 'Qty (count)'
+                      : isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType)
+                        ? 'Qty(sqft)'
+                        : 'Qty'}
                   </th>
-                  <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">Unit Price</th>
+                  <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">
+                    {manualEntryActive ? 'Rate' : 'Unit Price'}
+                  </th>
                   <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">Discount</th>
                   <th className="text-right p-2 border border-red-950/50 text-red-200 text-xs">Subtotal</th>
                   <th className="w-16 p-2 border border-red-950/50"></th>
@@ -445,14 +616,26 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                 {items.map((item, idx) => (
                 <tr key={idx} className="hover:bg-red-950/30 border-b border-red-950/40">
                   <td className="p-2 border border-red-950/40 text-white text-sm">{item.item_name}</td>
+                  {showTypeCol && (
+                    <td className="p-2 border border-red-950/40 text-red-200/90 text-sm">
+                      {String((item.metadata as { stock_type_label?: string })?.stock_type_label || '').trim() || '—'}
+                    </td>
+                  )}
                   <td className="p-2 border border-red-950/40 text-red-200/90 text-sm">
                     {item.size || '-'}
                   </td>
-                  {isBannerOrSticker(selectedItem?.type) && (
+                  {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && (
                     <td className="p-2 border border-red-950/40 text-right tabular-nums text-red-300/90 text-sm">-</td>
                   )}
                   <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">{item.quantity}</td>
-                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">Rs.{item.unit_price?.toFixed(2)}</td>
+                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">
+                    {item.service_type === 'manual' &&
+                    (item.metadata as { pricing_unit?: string })?.pricing_unit === 'per_sqft'
+                      ? `Rs.${item.unit_price?.toFixed(2)}/sqft`
+                      : item.service_type === 'manual'
+                        ? `Rs.${item.unit_price?.toFixed(2)}/unit`
+                        : `Rs.${item.unit_price?.toFixed(2)}`}
+                  </td>
                   <td className="p-2 border border-red-950/40 text-right tabular-nums text-red-300/90 text-sm">{(item.discount || 0) > 0 ? `Rs.${(item.discount || 0).toFixed(2)}` : '-'}</td>
                   <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">Rs.{item.subtotal?.toFixed(2)}</td>
                   <td className="p-2 border border-red-950/40">
@@ -472,9 +655,11 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                     setItemDropdownOpen(true);
                     setSelectedItem(null);
                     setSelectedSize(null);
+                    setSelectedStockTypeKey('');
+                    setManualSizeInput('');
                   }}
                   onFocus={() => setItemDropdownOpen(true)}
-                  placeholder="Select item"
+                  placeholder="Item name (type or pick from list)"
                   className="w-full border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white placeholder-red-400/50"
                 />
                 {itemDropdownOpen &&
@@ -489,27 +674,48 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                         width: Math.max(itemDropdownRect.width, 200),
                       }}
                     >
-                      {filteredItemNames.length === 0 ? (
-                        <li className="px-3 py-2 text-red-300/80 text-sm">No items. Add materials and stock in Settings / Stock first.</li>
+                      {filteredItemOptions.length === 0 ? (
+                        <li className="px-3 py-2 text-red-300/80 text-sm">
+                          No matches in settings — type the item name and size above, set qty and price, then Add.
+                        </li>
                       ) : (
-                        filteredItemNames.map((name) => (
+                        filteredItemOptions.map((opt) => (
                           <li
-                            key={name}
+                            key={opt.key}
                             onClick={() => {
-                              const first = billableItems.find((i) => i.name === name);
-                              if (first) {
-                                setSelectedItem(first);
-                                setSelectedSize(first);
-                                setItemSearch(name);
-                                setItemDropdownOpen(false);
-                                setSizeDropdownOpen(true);
-                                setQuantity('');
-                                setUnitPriceStr((first.calcType === 'sqft' || first.calcType === 'sqft_direct') ? String(first.pricePerSqft ?? '') : String(first.unitPrice ?? ''));
+                              const first = opt.item;
+                              const group = billableItems.filter((i) => sameProductGroupForSizePicker(first, i));
+                              const isRoll = first.type === 'banner_roll' || first.type === 'sticker_roll';
+                              const typeKeys = isRoll
+                                ? Array.from(
+                                    new Set(
+                                      group
+                                        .filter((r) => r.type === 'banner_roll' || r.type === 'sticker_roll')
+                                        .map((r) => String(r.stockTypeLabel || '').trim())
+                                    )
+                                  ).sort((a, b) => (a || '\uFFFF').localeCompare(b || '\uFFFF'))
+                                : [];
+                              const singleType = typeKeys.length === 1 ? typeKeys[0] : '';
+                              setSelectedStockTypeKey(singleType);
+                              setSelectedItem(first);
+                              if (isRoll && typeKeys.length > 1) {
+                                applyRollSizePick(null);
+                              } else {
+                                const filtered =
+                                  isRoll && typeKeys.length > 0
+                                    ? group.filter((r) => String(r.stockTypeLabel || '').trim() === singleType)
+                                    : group;
+                                const sizeChoices = dedupeBillableItems(filtered);
+                                const pickSize = sizeChoices[0] ?? first;
+                                applyRollSizePick(pickSize);
                               }
+                              setItemSearch(opt.label);
+                              setItemDropdownOpen(false);
+                              setSizeDropdownOpen(isRoll && typeKeys.length > 1 ? false : true);
                             }}
                             className="px-3 py-2 hover:bg-red-950/50 cursor-pointer text-white"
                           >
-                            {name}
+                            {opt.display}
                           </li>
                         ))
                       )}
@@ -517,9 +723,41 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                     document.body
                   )}
                 </td>
+                {showTypeCol && (
+                  <td className="p-1.5 border border-red-950/40 text-left">
+                    {showStockTypeColumn ? (
+                      <select
+                        value={selectedStockTypeKey}
+                        onChange={(e) => {
+                          const k = e.target.value;
+                          setSelectedStockTypeKey(k);
+                          if (stockTypeOptions.length > 1 && k === '') {
+                            applyRollSizePick(null);
+                            return;
+                          }
+                          const filtered = groupRowsForItem.filter((r) => String(r.stockTypeLabel || '').trim() === k);
+                          const list = dedupeBillableItems(filtered);
+                          applyRollSizePick(list[0] ?? null);
+                          setSizeDropdownOpen(true);
+                        }}
+                        className="w-full max-w-[10rem] border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white"
+                        aria-label="Stock type"
+                      >
+                        {stockTypeOptions.length > 1 && <option value="">Type…</option>}
+                        {stockTypeOptions.map((k) => (
+                          <option key={k || '__empty'} value={k}>
+                            {k === '' ? '—' : k}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-red-200/40 text-xs pl-1">—</span>
+                    )}
+                  </td>
+                )}
                 <td ref={sizeTriggerRef} className="p-1.5 border border-red-950/40 relative">
                   <div className="flex items-center gap-1">
-                    {isBannerOrSticker(selectedItem?.type) && selectedSize ? (
+                    {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && selectedSize ? (
                       <div className="flex items-center gap-0.5 flex-1 min-w-0">
                         <button
                           type="button"
@@ -568,12 +806,17 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                     ) : (
                       <input
                         type="text"
-                        value={formatSizeDisplay(selectedSize?.sizeName) || ''}
-                        readOnly
-                        onFocus={() => selectedItem && setSizeDropdownOpen(true)}
-                        onClick={() => selectedItem && setSizeDropdownOpen(true)}
-                        placeholder="Size"
-                        className="flex-1 min-w-0 border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white cursor-pointer placeholder-red-400/50"
+                        value={manualSizeInput}
+                        onChange={(e) => setManualSizeInput(e.target.value)}
+                        onFocus={() => {
+                          if (selectedItem) setSizeDropdownOpen(true);
+                        }}
+                        placeholder={
+                          selectedItem?.type === 'banner_roll' || selectedItem?.type === 'sticker_roll'
+                            ? 'Roll width (from Stock; pick from list)'
+                            : 'Size (type or pick from list)'
+                        }
+                        className="flex-1 min-w-0 border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white placeholder-red-400/50"
                       />
                     )}
                   {selectedSize && selectedSize.stockQty !== undefined && (
@@ -595,37 +838,41 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                         width: Math.max(sizeDropdownRect.width, 280),
                       }}
                     >
-                      {sizesForItem.map((s, idx) => (
+                      {sizesForItem.map((s) => {
+                        const feetRem = (s as { feetRemaining?: number }).feetRemaining ?? 0;
+                        const st = String((s as { stockTypeLabel?: string }).stockTypeLabel || '').trim();
+                        return (
                         <li
-                          key={idx}
+                          key={`${s.bannerStockId ?? s.stickerStockId ?? s.sizeId}-${s.materialId ?? 0}-${st}`}
                           onClick={() => {
-                            setSelectedSize(s);
+                            applyRollSizePick(s);
                             setSizeDropdownOpen(false);
-                            setQuantity('');
                             setItemDiscountStr('');
-                            setUnitPriceStr((s.calcType === 'sqft' || s.calcType === 'sqft_direct') ? String(s.pricePerSqft ?? '') : String(s.unitPrice ?? ''));
                           }}
                           className="px-3 py-2 hover:bg-red-950/50 cursor-pointer flex justify-between items-center gap-2 text-white"
                         >
                           <span>
-                            {isBannerOrSticker(selectedItem?.type)
-                              ? `${s.widthFt ?? 0} feet roll (${Math.round(((s as { feetRemaining?: number }).feetRemaining ?? 0) * 100) / 100} sqft balance can print)`
+                            {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType)
+                              ? `${s.widthFt ?? 0} ft roll${st ? ` · ${st}` : ''} · ${Math.round(feetRem * 100) / 100} ft on roll`
                               : formatSizeDisplay(s.sizeName) || s.sizeName}{' '}
-                            {!isBannerOrSticker(selectedItem?.type) && '(in)'}
+                            {!isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && '(in)'}
                           </span>
                           <span className="flex items-center gap-2 text-red-300/70 text-sm shrink-0">
                             {(s.stockQty !== undefined && selectedItem?.type !== 'banner_roll' && selectedItem?.type !== 'sticker_roll') && (
                               <span className="text-emerald-400/90">Stock: {s.stockQty}</span>
                             )}
-                            {(s.calcType === 'sqft' || s.calcType === 'sqft_direct') ? `Rs.${s.pricePerSqft}/sqft` : `Rs.${s.unitPrice}`}
+                            {(s.calcType === 'sqft' || s.calcType === 'sqft_direct')
+                              ? `Rs.${s.pricePerSqft ?? s.unitPrice}/sqft`
+                              : `Rs.${s.unitPrice}`}
                           </span>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>,
                     document.body
                   )}
                 </td>
-                {isBannerOrSticker(selectedItem?.type) && (
+                {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && (
                   <td className="p-1.5 border border-red-950/40 text-right tabular-nums text-emerald-400/90 text-sm">
                     {selectedSize ? `${Math.round(((selectedSize as { feetRemaining?: number }).feetRemaining ?? 0) * 100) / 100} sqft` : '-'}
                   </td>
@@ -633,23 +880,96 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                 <td className="p-1.5 border border-red-950/40 text-right">
                   <input
                     type="number"
-                    min={selectedItem?.calcType === 'sqft_direct' ? '0.01' : '1'}
-                    step={selectedItem?.calcType === 'sqft_direct' ? '0.01' : '1'}
-                    placeholder={selectedItem?.calcType === 'sqft_direct' ? 'Sqft' : '1'}
+                    min={
+                      manualEntryActive
+                        ? manualPricingUnit === 'per_sqft'
+                          ? '0.01'
+                          : '1'
+                        : selectedItem?.calcType === 'sqft_direct'
+                          ? '0.01'
+                          : '1'
+                    }
+                    step={
+                      manualEntryActive
+                        ? manualPricingUnit === 'per_sqft'
+                          ? '0.01'
+                          : '1'
+                        : selectedItem?.calcType === 'sqft_direct'
+                          ? '0.01'
+                          : '1'
+                    }
+                    placeholder={
+                      manualEntryActive
+                        ? manualPricingUnit === 'per_sqft'
+                          ? 'Sqft'
+                          : 'Count'
+                        : selectedItem?.calcType === 'sqft_direct'
+                          ? 'Sqft'
+                          : '1'
+                    }
                     value={quantity}
-                    onChange={(e) => setQuantity(selectedItem?.calcType === 'sqft_direct' ? e.target.value.replace(/[^0-9.]/g, '') : e.target.value.replace(/[^0-9]/g, ''))}
+                    onChange={(e) => {
+                      const raw = manualEntryActive
+                        ? manualPricingUnit === 'per_sqft'
+                          ? e.target.value.replace(/[^0-9.]/g, '')
+                          : e.target.value.replace(/[^0-9]/g, '')
+                        : selectedItem?.calcType === 'sqft_direct'
+                          ? e.target.value.replace(/[^0-9.]/g, '')
+                          : e.target.value.replace(/[^0-9]/g, '');
+                      setQuantity(raw);
+                      const q = parseFloat(raw) || 0;
+                      const w =
+                        parseFloat(sizeWidthStr) ||
+                        (selectedSize?.widthFt ?? 0);
+                      if (
+                        q > 0 &&
+                        w > 0 &&
+                        selectedItem?.calcType === 'sqft_direct' &&
+                        isBannerOrStickerOrCustomRoll(selectedItem.type, selectedItem.calcType)
+                      ) {
+                        setSizeLengthStr(String(Math.round((q / w) * 100) / 100));
+                      }
+                    }}
                     className="w-16 border border-red-900/50 rounded px-1 py-1 text-sm text-right tabular-nums bg-black/60 text-white placeholder-red-400/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                 </td>
-                <td className="p-1.5 border border-red-950/40 text-right">
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={unitPriceStr}
-                    onChange={(e) => setUnitPriceStr(e.target.value.replace(/[^0-9.]/g, ''))}
-                    placeholder={selectedSize ? (selectedSize.calcType === 'sqft' ? 'per sqft' : '0') : '-'}
-                    className="w-16 border border-red-900/50 rounded px-1 py-1 text-xs text-right tabular-nums bg-black/60 text-white placeholder-red-400/50"
-                  />
+                <td className="p-1.5 border border-red-950/40 text-right align-top">
+                  {manualEntryActive ? (
+                    <div className="flex flex-col items-end gap-1 max-w-[7.5rem] ml-auto">
+                      <select
+                        value={manualPricingUnit}
+                        onChange={(e) => setManualPricingUnit(e.target.value as 'per_sqft' | 'per_unit')}
+                        className="w-full border border-red-900/50 rounded px-1 py-1 text-[11px] bg-black/60 text-white"
+                        aria-label="Manual line: price per sqft or per unit"
+                      >
+                        <option value="per_unit">Rs./unit (count)</option>
+                        <option value="per_sqft">Rs./sqft</option>
+                      </select>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={unitPriceStr}
+                        onChange={(e) => setUnitPriceStr(e.target.value.replace(/[^0-9.]/g, ''))}
+                        placeholder={manualPricingUnit === 'per_sqft' ? 'per sqft' : 'per unit'}
+                        className="w-full border border-red-900/50 rounded px-1 py-1 text-xs text-right tabular-nums bg-black/60 text-white placeholder-red-400/50"
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={unitPriceStr}
+                      onChange={(e) => setUnitPriceStr(e.target.value.replace(/[^0-9.]/g, ''))}
+                      placeholder={
+                        selectedSize
+                          ? selectedSize.calcType === 'sqft'
+                            ? 'per sqft'
+                            : '0'
+                          : '-'
+                      }
+                      className="w-16 border border-red-900/50 rounded px-1 py-1 text-xs text-right tabular-nums bg-black/60 text-white placeholder-red-400/50"
+                    />
+                  )}
                 </td>
                 <td className="p-1.5 border border-red-950/40 text-right">
                   <input
@@ -672,7 +992,17 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                       setItemDropdownOpen(false);
                       setSizeDropdownOpen(false);
                     }}
-                    disabled={!selectedItem || !selectedSize || !quantity || (selectedItem?.calcType === 'sqft_direct' ? parseFloat(quantity) < 0.01 : parseInt(quantity) < 1)}
+                    disabled={(() => {
+                      const q = parseFloat(String(quantity)) || 0;
+                      const manualMode = !selectedItem && itemSearch.trim().length > 0;
+                      if (manualMode) {
+                        const up = parseFloat(unitPriceStr) || 0;
+                        return q <= 0 || up <= 0 || currentSubtotal <= 0;
+                      }
+                      if (!selectedItem || !selectedSize || !quantity) return true;
+                      if (selectedItem.calcType === 'sqft_direct' ? parseFloat(quantity) < 0.01 : parseInt(quantity, 10) < 1) return true;
+                      return currentSubtotal <= 0;
+                    })()}
                     className="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Add
@@ -680,7 +1010,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                 </td>
               </tr>
               <tr className="bg-red-950/30 border-b border-red-950/40">
-                <td className="p-2 border border-red-950/40" colSpan={isBannerOrSticker(selectedItem?.type) ? 5 : 4}></td>
+                <td className="p-2 border border-red-950/40" colSpan={isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) ? 5 : 4}></td>
                 <td className="p-2 border border-red-950/40 text-right tabular-nums font-semibold text-white text-sm">
                   Total
                 </td>

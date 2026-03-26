@@ -32,6 +32,7 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
   const [payBalanceBill, setPayBalanceBill] = useState<Bill | null>(null);
   const [markingPaidIds, setMarkingPaidIds] = useState<Set<number>>(new Set());
   const [markingAllPaid, setMarkingAllPaid] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState<SearchState>({ number: '', customer: '', from: '', to: '', pending_settlement: '' });
 
   const fetchBills = () => {
@@ -121,6 +122,24 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
       onBillUpdated?.();
     } finally {
       setMarkingAllPaid(false);
+    }
+  };
+
+  const deleteBill = async (bill: Bill) => {
+    if (!window.confirm(`Delete ${bill.bill_number}? This will rollback stock and payments.`)) return;
+    setDeletingIds((prev) => new Set(prev).add(bill.id));
+    try {
+      await api.bills.delete(bill.id);
+      setBills((prev) => prev.filter((b) => b.id !== bill.id));
+      onBillUpdated?.();
+    } catch (err) {
+      window.alert((err as Error).message);
+    } finally {
+      setDeletingIds((prev) => {
+        const s = new Set(prev);
+        s.delete(bill.id);
+        return s;
+      });
     }
   };
 
@@ -234,6 +253,14 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
                       className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {viewingBillId === b.id ? 'Loading...' : 'View / Print'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteBill(b)}
+                      disabled={deletingIds.has(b.id)}
+                      className="px-3 py-1 bg-red-950/60 text-red-200 rounded text-sm hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed border border-red-900/50"
+                    >
+                      {deletingIds.has(b.id) ? 'Deleting...' : 'Delete'}
                     </button>
                   </div>
                 </td>

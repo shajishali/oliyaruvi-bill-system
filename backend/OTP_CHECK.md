@@ -6,7 +6,7 @@ Create `backend/.env` with:
 
 ```
 RESEND_API_KEY=re_your_actual_key_here
-RESET_EMAIL=shakiththiyanpirabakaran20000@gmail.com
+RESET_EMAIL=oliyaruviprinters@gmail.com
 ```
 
 ## 2. Restart the backend
@@ -26,7 +26,7 @@ npm start
 ## 4. Test the OTP flow
 
 1. Go to Settings → Forgot password?
-2. Enter: shakiththiyanpirabakaran20000@gmail.com
+2. Enter: oliyaruviprinters@gmail.com
 3. Click **Send OTP**
 4. Check your email inbox (and spam folder)
 

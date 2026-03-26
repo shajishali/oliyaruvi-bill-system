@@ -1,17 +1,45 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { focusNextOnEnter, preventMouseUpWhenSelecting, selectIfEmptyOrZero } from '../../utils/modalFormHelpers';
 
 interface AddStickerStockModalProps {
   onClose: () => void;
-  onConfirm: (data: { size_name: string; stock_qty: number; low_stock_threshold: number }) => Promise<void>;
+  onConfirm: (data: {
+    size_name: string;
+    stock_qty: number;
+    low_stock_threshold?: number;
+    stock_type?: string;
+  }) => Promise<void>;
   onError?: (message: string) => void;
 }
 
 export default function AddStickerStockModal({ onClose, onConfirm, onError }: AddStickerStockModalProps) {
+  const [stockType, setStockType] = useState('');
   const [sizeName, setSizeName] = useState('');
-  const [stockQty, setStockQty] = useState('');
-  const [threshold, setThreshold] = useState(10);
+  const [stockQty, setStockQty] = useState('0');
+  const [threshold, setThreshold] = useState('');
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  const typeRef = useRef<HTMLInputElement>(null);
+  const widthRef = useRef<HTMLInputElement>(null);
+  const qtyRef = useRef<HTMLInputElement>(null);
+  const thresholdRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      typeRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,10 +48,12 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
     setSubmitError('');
     setSaving(true);
     try {
+      const thresh = threshold === '' || threshold === null ? -1 : parseInt(String(threshold));
       await onConfirm({
+        stock_type: stockType.trim() || undefined,
         size_name: sizeName.trim(),
         stock_qty: qty,
-        low_stock_threshold: threshold,
+        low_stock_threshold: (thresh >= 0 && !isNaN(thresh)) ? thresh : -1,
       });
       onClose();
     } catch (err) {
@@ -35,53 +65,107 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6">
-        <h3 className="text-lg font-semibold mb-4 text-white">Add Sticker Size</h3>
+  const modal = (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200] p-4"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) e.preventDefault();
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-sticker-roll-title"
+        className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6 relative z-[1]"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 id="add-sticker-roll-title" className="text-lg font-semibold mb-4 text-white">
+          Add Sticker Size
+        </h3>
         {submitError && (
           <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg border border-red-900/50 text-sm">
             {submitError}
           </div>
         )}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate autoComplete="off">
           <div>
-            <label className="block text-sm font-medium text-red-200/90 mb-1">Size (feet)</label>
+            <label htmlFor="add-sticker-type" className="block text-sm font-medium text-red-200/90 mb-1">
+              Type <span className="text-red-400/60 font-normal">(optional)</span>
+            </label>
             <input
+              id="add-sticker-type"
+              ref={typeRef}
               type="text"
+              value={stockType}
+              onChange={(e) => setStockType(e.target.value)}
+              onKeyDown={(e) => focusNextOnEnter(e, widthRef)}
+              placeholder="e.g. Gloss, matte"
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+            />
+          </div>
+          <div>
+            <label htmlFor="add-sticker-width" className="block text-sm font-medium text-red-200/90 mb-1">
+              Size (feet)
+            </label>
+            <input
+              id="add-sticker-width"
+              ref={widthRef}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               value={sizeName}
               onChange={(e) => setSizeName(e.target.value)}
+              onKeyDown={(e) => focusNextOnEnter(e, qtyRef)}
               placeholder="e.g. 6 feet, 8 feet, 10 feet"
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-red-200/90 mb-1">Qty (sticker rolls)</label>
+            <label htmlFor="add-sticker-qty" className="block text-sm font-medium text-red-200/90 mb-1">
+              Qty (sticker rolls)
+            </label>
             <input
-              type="number"
-              min="0"
+              id="add-sticker-qty"
+              ref={qtyRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
               placeholder="0"
               value={stockQty}
-              onChange={(e) => setStockQty(e.target.value.replace(/[^0-9]/g, ''))}
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+              onChange={(e) => setStockQty(e.target.value.replace(/\D/g, ''))}
+              onFocus={selectIfEmptyOrZero}
+              onMouseUp={preventMouseUpWhenSelecting}
+              onKeyDown={(e) => focusNextOnEnter(e, thresholdRef)}
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-red-200/90 mb-1">Low Stock At</label>
+            <label htmlFor="add-sticker-threshold" className="block text-sm font-medium text-red-200/90 mb-1">
+              Low Stock At <span className="text-red-400/60 font-normal">(optional)</span>
+            </label>
             <input
-              type="number"
-              min="0"
+              id="add-sticker-threshold"
+              ref={thresholdRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="Leave empty to skip alerts"
               value={threshold}
-              onChange={(e) => setThreshold(parseInt(e.target.value) || 10)}
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white"
+              onChange={(e) => setThreshold(e.target.value.replace(/\D/g, ''))}
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
             />
           </div>
           <div className="flex gap-2 justify-end pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70">
+            <button type="button" onClick={onClose} className="px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70 transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={saving} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
+            <button type="submit" disabled={saving} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors">
               {saving ? 'Adding...' : 'Add'}
             </button>
           </div>
@@ -89,4 +173,6 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
       </div>
     </div>
   );
+
+  return createPortal(modal, document.body);
 }

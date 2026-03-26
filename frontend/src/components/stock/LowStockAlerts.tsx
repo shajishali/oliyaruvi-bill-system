@@ -23,14 +23,18 @@ export default function LowStockAlerts({ items }: LowStockAlertsProps) {
         </Link>
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
-        {items.map((item) => (
-          <span
-            key={`${item.type}-${item.id}`}
-            className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-600/40 text-amber-200 border border-amber-500/50"
-          >
-            {item.name} ({item.type}): {item.type === 'banner' || item.type === 'sticker' ? `${(item.feet_remaining ?? item.stock_qty * 150).toFixed(0)} ft` : item.stock_qty} left
-          </span>
-        ))}
+        {items.map((item) => {
+          const feetBased = item.feet_remaining != null || item.type === 'banner' || item.type === 'sticker';
+          const leftText = feetBased ? `${(item.feet_remaining ?? item.stock_qty * 150).toFixed(0)} ft` : `${item.stock_qty}`;
+          return (
+            <span
+              key={`${item.type}-${item.id}`}
+              className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-600/40 text-amber-200 border border-amber-500/50"
+            >
+              {item.name} ({item.type}): {leftText} left
+            </span>
+          );
+        })}
       </div>
     </div>
   );

@@ -3,8 +3,13 @@ const router = express.Router();
 const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
 
-// Allowed email for OTP reset - change in .env as RESET_EMAIL
-const ALLOWED_EMAIL = (process.env.RESET_EMAIL || 'shakiththiyanpirabakaran20000@gmail.com').toLowerCase();
+// Allowed email for OTP reset - set RESET_EMAIL in .env or uses default below
+const ALLOWED_EMAIL = (process.env.RESET_EMAIL || 'oliyaruviprinters@gmail.com').toLowerCase();
+
+function getResendKey() {
+  const raw = process.env.RESEND_API_KEY || process.env.RESEND_KEY || process.env.resend_key || process.env.resend_api_key;
+  return raw ? String(raw).trim() : '';
+}
 
 // In-memory OTP store: { email: { otp, expires } }
 const otpStore = new Map();
@@ -47,7 +52,7 @@ async function sendViaGmail(to, subject, html) {
 }
 
 async function sendViaResend(to, subject, html) {
-  const apiKey = process.env.RESEND_API_KEY || process.env.RESEND_KEY;
+  const apiKey = getResendKey();
   if (!apiKey) return null;
   const resend = new Resend(apiKey);
   const fromEmail = process.env.RESEND_FROM || 'onboarding@resend.dev';
@@ -62,14 +67,15 @@ async function sendViaResend(to, subject, html) {
 }
 
 // POST /api/auth/request-otp - Send OTP via Gmail or Resend (Resend fallback when Gmail blocked)
+// appUser: true = allow any email (for app login forgot password); otherwise restrict to RESET_EMAIL
 router.post('/request-otp', async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, appUser } = req.body;
     const trimmed = (email || '').trim().toLowerCase();
     if (!trimmed) {
       return res.status(400).json({ error: 'Email required' });
     }
-    if (trimmed !== ALLOWED_EMAIL) {
+    if (!appUser && trimmed !== ALLOWED_EMAIL) {
       return res.status(400).json({ error: `Only ${ALLOWED_EMAIL} can reset password` });
     }
 
@@ -89,10 +95,11 @@ router.post('/request-otp', async (req, res) => {
       </div>
     `;
 
-    const resendKey = process.env.RESEND_API_KEY || process.env.RESEND_KEY;
+    const resendKey = getResendKey();
     const hasGmail = process.env.GMAIL_USER && (process.env.GMAIL_APP_PWD || process.env.GMAIL_APP_PASSWORD);
     let sent = false;
     let lastError = null;
+    let resendError = null;
     let method = null;
 
     // Try Resend first when configured (HTTPS, works when Gmail SMTP is blocked)
@@ -102,6 +109,7 @@ router.post('/request-otp', async (req, res) => {
         sent = true;
         method = 'resend';
       } catch (err) {
+        resendError = err;
         lastError = err;
         console.warn('[OTP] Resend failed:', err.message);
       }
@@ -124,10 +132,13 @@ router.post('/request-otp', async (req, res) => {
     }
 
     if (!sent) {
+      if (resendKey && resendError) {
+        throw new Error(resendError.message || String(resendError));
+      }
       throw new Error(
         lastError && isConnectionError(lastError)
-          ? 'Gmail blocked. Add RESEND_KEY to .env (resend.com/api-keys) as fallback.'
-          : 'GMAIL_APP_PWD or RESEND_KEY required in .env. See OTP_EMAIL_SETUP.md'
+          ? 'Gmail blocked. Add RESEND_API_KEY or RESEND_KEY to backend/.env (get key at resend.com/api-keys).'
+          : 'Add RESEND_API_KEY or RESEND_KEY to backend/.env. Get key at resend.com/api-keys.'
       );
     }
 
@@ -136,7 +147,7 @@ router.post('/request-otp', async (req, res) => {
     console.error('OTP send error:', err.message);
     let msg = err.message || 'Failed to send email';
     if (/ECONNRESET|ETIMEDOUT|ECONNREFUSED|Greeting never received/i.test(msg)) {
-      msg = 'Gmail blocked. Add RESEND_KEY to .env (resend.com/api-keys) as fallback.';
+      msg = 'Gmail blocked. Add RESEND_API_KEY or RESEND_KEY to backend/.env (resend.com/api-keys).';
     }
     res.status(500).json({ error: msg });
   }

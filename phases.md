@@ -167,6 +167,31 @@ billingSystem/
 | **7.5** | electron-builder: Windows `.exe` installer, app name "Oliyaruvi Printers" |
 | **7.6** | Scripts: `dev`, `build`, `dist` |
 
+### Phase 7 Usage
+
+**Development (run from project root):**
+```bash
+npm run dev
+```
+Starts backend, frontend (Vite), and Electron. Electron loads `http://localhost:3000` (Vite proxies API to backend).
+
+**Build for production:**
+```bash
+npm run build
+```
+Builds the React frontend to `frontend/dist/`.
+
+**Create Windows installer:**
+```bash
+npm run dist
+```
+Builds frontend, then creates the installer in `release/`. The `.exe` installer is named "Oliyaruvi Printers".
+
+**Installed app:**
+- Database is stored in `%APPDATA%\Oliyaruvi Printers\oliyaruvi.db` (or equivalent userData path)
+- Migrations and seed run automatically on first launch
+- Backend serves the app on port 5000; no separate servers needed
+
 ---
 
 ## Phase Dependencies

@@ -3,8 +3,6 @@ import Layout from './components/layout/Layout';
 import AuthLayout from './components/auth/AuthLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 import Home from './pages/Home';
-import Login from './pages/Login';
-import Register from './pages/Register';
 import Forgot from './pages/Forgot';
 import Dashboard from './pages/Dashboard';
 import Billing from './pages/Billing';
@@ -17,8 +15,8 @@ export default function App() {
     <Routes>
       <Route element={<AuthLayout />}>
         <Route path="/" element={<Home />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="/register" element={<Navigate to="/" replace />} />
         <Route path="/forgot" element={<Forgot />} />
       </Route>
       <Route

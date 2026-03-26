@@ -15,14 +15,18 @@ interface StockTransactionLogProps {
   transactions: unknown[];
   frameNames: Record<number, string>;
   photoNames: Record<number, string>;
+  photocopyNames?: Record<number, string>;
+  customNames?: Record<number, string>;
   bannerNames?: Record<number, string>;
   stickerNames?: Record<number, string>;
 }
 
-export default function StockTransactionLog({ transactions, frameNames, photoNames, bannerNames = {}, stickerNames = {} }: StockTransactionLogProps) {
+export default function StockTransactionLog({ transactions, frameNames, photoNames, photocopyNames = {}, customNames = {}, bannerNames = {}, stickerNames = {} }: StockTransactionLogProps) {
   const getName = (type: string, id: number) => {
     if (type === 'frame') return frameNames[id] || `Frame #${id}`;
     if (type === 'photo') return photoNames[id] || `Photo #${id}`;
+    if (type === 'photocopy') return photocopyNames[id] || `Photocopy #${id}`;
+    if (type === 'custom') return customNames[id] || `Item #${id}`;
     if (type === 'banner') return bannerNames[id] || `Banner #${id}`;
     if (type === 'sticker') return stickerNames[id] || `Sticker #${id}`;
     return '-';

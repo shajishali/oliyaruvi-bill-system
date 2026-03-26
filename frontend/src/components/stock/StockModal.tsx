@@ -13,11 +13,12 @@ interface StockModalProps {
   type: string;
   item: StockItem | null;
   itemType: string;
+  isRollType?: boolean;
   onClose: () => void;
   onConfirm: (data: { quantity: number; reason: string | null; transaction_type?: string }) => void | Promise<void>;
 }
 
-export default function StockModal({ type, item, itemType, onClose, onConfirm }: StockModalProps) {
+export default function StockModal({ type, item, itemType, isRollType = false, onClose, onConfirm }: StockModalProps) {
   const [quantity, setQuantity] = useState('');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -25,7 +26,7 @@ export default function StockModal({ type, item, itemType, onClose, onConfirm }:
 
   const isEdit = type === 'edit';
   const isReduce = type === 'reduce' || type === 'adjust' || (isEdit && action === 'reduce');
-  const isBanner = itemType === 'banner' || itemType === 'sticker';
+  const isBanner = itemType === 'banner' || itemType === 'sticker' || isRollType;
   const feetRemaining = isBanner ? ((item as StockItem)?.feet_remaining ?? ((item?.stock_qty ?? 0) * 150)) : 0;
   const maxQty = isReduce ? (isBanner ? Math.floor(feetRemaining) : (item?.stock_qty ?? 0)) : (isBanner ? 999 : 9999);
 
@@ -50,7 +51,7 @@ export default function StockModal({ type, item, itemType, onClose, onConfirm }:
           {isEdit ? 'Edit Stock' : type === 'add' ? 'Add' : type === 'reduce' ? 'Reduce' : 'Adjust'} Stock
         </h3>
         <p className="text-sm text-red-200/90 mb-2">
-          {formatSizeDisplay(item?.size_name || item?.material_name) || item?.size_name || item?.material_name} {itemType === 'frame' ? '(Frame)' : itemType === 'photo' ? '(Photo)' : itemType === 'banner' ? '(Banner roll)' : itemType === 'sticker' ? '(Sticker roll)' : ''}
+          {formatSizeDisplay(item?.size_name || item?.material_name) || item?.size_name || item?.material_name} {itemType === 'frame' ? '(Frame)' : itemType === 'photo' ? '(Photo)' : itemType === 'photocopy' ? '(Photocopy)' : itemType === 'custom' ? '(Section item)' : itemType === 'banner' ? '(Banner roll)' : itemType === 'sticker' ? '(Sticker roll)' : ''}
         </p>
         {item && (
           <p className="text-sm text-red-300/70 mb-4">

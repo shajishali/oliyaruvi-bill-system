@@ -14,8 +14,11 @@ interface StoredUser {
 
 interface AuthContextType {
   isAuthenticated: boolean;
+  hasUsers: boolean;
+  hasUserWithEmail: (email: string) => boolean;
   login: (email: string, password: string) => { success: boolean; error?: string };
   register: (name: string, email: string, password: string) => { success: boolean; error?: string };
+  resetPassword: (email: string, newPassword: string) => { success: boolean; error?: string };
   logout: () => void;
 }
 
@@ -39,12 +42,10 @@ function saveUsers(users: StoredUser[]) {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(AUTH_KEY);
-    setIsAuthenticated(stored === 'true');
-  }, []);
+  // Lazy initializer reads localStorage synchronously so ProtectedRoute never flashes a redirect
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () => localStorage.getItem(AUTH_KEY) === 'true'
+  );
 
   const login = (email: string, password: string) => {
     const trimmed = email.trim();
@@ -93,13 +94,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { success: true };
   };
 
+  const resetPassword = (email: string, newPassword: string) => {
+    const trimmed = email.trim();
+    if (!isValidEmail(trimmed)) {
+      return { success: false, error: 'Please enter a valid email address' };
+    }
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters' };
+    }
+    const users = getUsers();
+    const idx = users.findIndex((u) => u.email.toLowerCase() === trimmed.toLowerCase());
+    if (idx === -1) {
+      return { success: false, error: 'No account found with this email.' };
+    }
+    users[idx] = { ...users[idx], password: newPassword };
+    saveUsers(users);
+    return { success: true };
+  };
+
   const logout = () => {
     localStorage.removeItem(AUTH_KEY);
     setIsAuthenticated(false);
   };
 
+  const hasUsers = getUsers().length > 0;
+  const hasUserWithEmail = (email: string) =>
+    getUsers().some((u) => u.email.toLowerCase() === (email || '').trim().toLowerCase());
+
   return (
-    <AuthContext.Provider value={{ isAuthenticated, login, register, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, hasUsers, hasUserWithEmail, login, register, resetPassword, logout }}>
       {children}
     </AuthContext.Provider>
   );

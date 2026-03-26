@@ -1,0 +1,62 @@
+{
+  "name": "oliyaruvi-printers",
+  "version": "1.0.2",
+  "description": "Oliyaruvi Printers - Billing System",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on http://localhost:3000 && electron .\"",
+    "dev:backend": "cd backend && npm start",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "dist": "npm run build && npx electron-builder --win",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
+  },
+  "author": "Oliyaruvi Printers",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "nodemailer": "^8.0.2",
+    "resend": "^6.9.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.oliyaruvi.printers",
+    "productName": "Oliyaruvi Printers",
+    "artifactName": "Oliyaruvi Printers Setup ${version}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "backend/**/*",
+      "!backend/.env",
+      "frontend/dist/**/*",
+      "frontend/public/**/*",
+      "database/seed.sql"
+    ],
+    "asarUnpack": [
+      "backend/**/*",
+      "frontend/dist/**/*",
+      "database/**/*"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

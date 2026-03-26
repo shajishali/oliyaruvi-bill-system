@@ -9,6 +9,11 @@ database/*.db
 dist/
 build/
 out/
+release/
+
+# Electron
+*.exe
+*.msi
 
 # Environment
 .env
@@ -27,3 +32,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+
+.env.example

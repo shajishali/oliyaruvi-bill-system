@@ -6,6 +6,7 @@ import StockTransactionLog from '../components/stock/StockTransactionLog';
 import AddItemModal from '../components/stock/AddItemModal';
 import AddBannerStockModal from '../components/stock/AddBannerStockModal';
 import AddStickerStockModal from '../components/stock/AddStickerStockModal';
+import AddCustomRollItemModal from '../components/stock/AddCustomRollItemModal';
 import { api } from '../api/client';
 import { STOCK_SECTIONS_KEY, STOCK_CUSTOM_LABELS_KEY } from '../constants/stockSections';
 
@@ -14,8 +15,14 @@ type SectionId = 'frames' | 'photos' | 'log' | string;
 interface StockItem {
   id: number;
   size_name?: string;
+  subitem_name?: string;
   material_name?: string;
   frame_type?: string;
+  item_type?: string;
+  stock_type?: string;
+  print_type?: string;
+  unit_price?: number | null;
+  price_unit?: string;
   stock_qty?: number;
   feet_remaining?: number;
   low_stock_threshold?: number;
@@ -40,6 +47,18 @@ function resolveTypedSection(input: string): SectionId | null {
   return null;
 }
 
+// NOTE: kept for backwards compatibility in older code paths.
+function getCustomStockType(sectionId: string, customLabels: Record<string, string>): 'frame' | 'photo' | 'photocopy' | 'banner' | 'sticker' | null {
+  const label = getSectionLabel(sectionId, customLabels).trim().toLowerCase();
+  if (!label) return null;
+  if (label.includes('banner')) return 'banner';
+  if (label.includes('sticker')) return 'sticker';
+  if (label.includes('frame')) return 'frame';
+  if (label.includes('photocopy') || label.includes('copy')) return 'photocopy';
+  if (label.includes('photo')) return 'photo';
+  return null;
+}
+
 function getDefaultSections(): SectionId[] {
   try {
     const stored = localStorage.getItem(STOCK_SECTIONS_KEY);
@@ -50,7 +69,7 @@ function getDefaultSections(): SectionId[] {
   } catch {
     /* ignore */
   }
-  return ['frames', 'banner', 'sticker'];
+  return [];
 }
 
 function getDefaultCustomLabels(): Record<string, string> {
@@ -66,20 +85,33 @@ function getDefaultCustomLabels(): Record<string, string> {
 export default function StockManagement() {
   const [enabledSections, setEnabledSections] = useState<SectionId[]>(getDefaultSections);
   const [customLabels, setCustomLabels] = useState<Record<string, string>>(getDefaultCustomLabels);
-  const [activeTab, setActiveTab] = useState<SectionId>('frames');
+  const [activeTab, setActiveTab] = useState<SectionId | null>(() => {
+    const defaults = getDefaultSections();
+    return defaults[0] ?? null;
+  });
   const [frames, setFrames] = useState<StockItem[]>([]);
   const [photos, setPhotos] = useState<StockItem[]>([]);
+  const [photocopy, setPhotocopy] = useState<StockItem[]>([]);
+  const [customSectionsMeta, setCustomSectionsMeta] = useState<Record<string, 'count' | 'roll'>>({});
   const [transactions, setTransactions] = useState<unknown[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [addSectionOpen, setAddSectionOpen] = useState(false);
   const [newSectionInput, setNewSectionInput] = useState('');
 
-  const [stockModal, setStockModal] = useState<{ type: string; item: StockItem; itemType: string } | null>(null);
-  const [addModal, setAddModal] = useState<'frame' | 'photo' | null>(null);
+  const [stockModal, setStockModal] = useState<{ type: string; item: StockItem; itemType: string; isRollType?: boolean } | null>(null);
+  const [addModal, setAddModal] = useState<'frame' | 'photo' | 'photocopy' | null>(null);
   const [addBannerModal, setAddBannerModal] = useState(false);
   const [addStickerModal, setAddStickerModal] = useState(false);
-  const [addTypeChoiceModal, setAddTypeChoiceModal] = useState(false);
+  /** Custom tabs (e.g. clothes): open simple Size/Qty/Low stock modal for this section id */
+  const [customAddSectionId, setCustomAddSectionId] = useState<string | null>(null);
+  const [customAddSectionKind, setCustomAddSectionKind] = useState<'count' | 'roll' | null>(null);
+  const [customBySection, setCustomBySection] = useState<Record<string, StockItem[]>>({});
+
+  const [pendingSection, setPendingSection] = useState<{ sectionId: string; label: string; isCustom: boolean } | null>(null);
+  const [customSectionTypeChoiceOpen, setCustomSectionTypeChoiceOpen] = useState(false);
+  const [pendingCustomSectionType, setPendingCustomSectionType] = useState<'count' | 'roll'>('count');
+  const [pendingCustomSectionAffectsSales, setPendingCustomSectionAffectsSales] = useState(true);
   const [bannerStock, setBannerStock] = useState<StockItem[]>([]);
   const [stickerStock, setStickerStock] = useState<StockItem[]>([]);
 
@@ -91,46 +123,157 @@ export default function StockManagement() {
     localStorage.setItem(STOCK_CUSTOM_LABELS_KEY, JSON.stringify(customLabels));
   }, [customLabels]);
 
+  useEffect(() => {
+    if (enabledSections.length === 0) {
+      setActiveTab(null);
+      return;
+    }
+    if (!activeTab || !enabledSections.includes(activeTab)) {
+      setActiveTab(enabledSections[0]);
+    }
+  }, [enabledSections, activeTab]);
+
+  const removeSectionFromBar = async (sectionId: SectionId) => {
+    const label = getSectionLabel(sectionId, customLabels);
+    const isCustom = String(sectionId).startsWith('custom-');
+    const msg = isCustom
+      ? `Remove section "${label}" and delete all stock rows in it?`
+      : `Remove "${label}" from the stock bar? (Your data is not deleted; add the section again with + Add Section if needed.)`;
+    if (!window.confirm(msg)) return;
+    setError('');
+    try {
+      if (isCustom) await api.stock.deleteCustomSection(String(sectionId));
+    } catch (err) {
+      setError((err as Error).message);
+      return;
+    }
+    if (isCustom) {
+      setCustomLabels((prev) => {
+        const next = { ...prev };
+        delete next[String(sectionId)];
+        return next;
+      });
+    }
+    setEnabledSections((prev) => {
+      const next = prev.filter((s) => s !== sectionId);
+      setActiveTab((cur) => {
+        if (cur !== sectionId) return cur;
+        return next[0] ?? null;
+      });
+      return next;
+    });
+    if (customAddSectionId === sectionId) {
+      setCustomAddSectionId(null);
+      setCustomAddSectionKind(null);
+    }
+    fetchData();
+  };
+
   const addSectionFromInput = () => {
     const trimmed = newSectionInput.trim();
     if (!trimmed) return;
 
     const resolved = resolveTypedSection(trimmed);
     if (resolved) {
-      if (!enabledSections.includes(resolved)) {
-        setEnabledSections((prev) => [...prev, resolved]);
-      }
-      setActiveTab(resolved);
+      setPendingSection({
+        sectionId: resolved,
+        label: getSectionLabel(resolved, customLabels),
+        isCustom: false,
+      });
+      setPendingCustomSectionType(defaultSectionKindFromLabel(getSectionLabel(resolved, customLabels)));
+      setPendingCustomSectionAffectsSales(true);
+      setCustomSectionTypeChoiceOpen(true);
     } else {
       const customId = 'custom-' + Date.now();
-      setCustomLabels((prev) => ({ ...prev, [customId]: trimmed }));
-      setEnabledSections((prev) => [...prev, customId]);
-      setActiveTab(customId);
+      setPendingSection({ sectionId: customId, label: trimmed, isCustom: true });
+      const defaultKind = defaultSectionKindFromLabel(trimmed);
+      setPendingCustomSectionType(defaultKind);
+      setPendingCustomSectionAffectsSales(true);
+      setCustomSectionTypeChoiceOpen(true);
     }
     setNewSectionInput('');
     setAddSectionOpen(false);
   };
 
-  const openAddModal = (type: 'frame' | 'photo') => {
+  const defaultSectionKindFromLabel = (label: string): 'count' | 'roll' => {
+    const t = label.trim().toLowerCase();
+    if (t.includes('cloth')) return 'roll';
+    if (t.includes('sticker') || t.includes('banner')) return 'roll';
+    if (t.includes('photocopy') || t.includes('photo') || t.includes('frame') || t.includes('copy')) return 'count';
+    return 'count';
+  };
+
+  const openAddModal = (type: 'frame' | 'photo' | 'photocopy') => {
     setError('');
+    setCustomAddSectionId(null);
+    setCustomAddSectionKind(null);
     setAddModal(type);
   };
 
   const openAddModalForCustom = (sectionId: string) => {
     setError('');
-    const label = getSectionLabel(sectionId, customLabels).toLowerCase();
-    if (sectionId === 'banner' || label === 'banner') {
-      setAddBannerModal(true);
-    } else if (sectionId === 'sticker' || label === 'sticker') {
-      setAddStickerModal(true);
-    } else {
-      setAddTypeChoiceModal(true);
+    setAddModal(null);
+    setCustomAddSectionId(null);
+    const label = getSectionLabel(sectionId, customLabels);
+    const kind = customSectionsMeta[sectionId] ?? defaultSectionKindFromLabel(label);
+    setCustomAddSectionKind(kind);
+    setCustomAddSectionId(sectionId);
+  };
+
+  const confirmPendingCustomSection = async () => {
+    if (!pendingSection) return;
+    const { sectionId, label, isCustom } = pendingSection;
+    setError('');
+    try {
+      if (isCustom) {
+        await api.stock.createCustomSection({
+          section_id: sectionId,
+          label,
+          section_type: pendingCustomSectionType,
+          affects_sales: pendingCustomSectionAffectsSales,
+        });
+        setCustomLabels((prev) => ({ ...prev, [sectionId]: label }));
+      }
+      setEnabledSections((prev) => (prev.includes(sectionId) ? prev : [...prev, sectionId]));
+      setActiveTab(sectionId);
+      if (isCustom) await fetchData();
+      setPendingSection(null);
+      setCustomSectionTypeChoiceOpen(false);
+      setPendingCustomSectionType('count');
+      setPendingCustomSectionAffectsSales(true);
+      setNewSectionInput('');
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
 
-  const handleAddBannerStock = async (data: { size_name: string; stock_qty: number; low_stock_threshold: number }) => {
+  const cancelPendingCustomSection = () => {
+    setPendingSection(null);
+    setCustomSectionTypeChoiceOpen(false);
+    setPendingCustomSectionType('count');
+    setPendingCustomSectionAffectsSales(true);
+  };
+
+  const handleAddBannerStock = async (data: {
+    size_name: string;
+    stock_qty: number;
+    low_stock_threshold?: number;
+    stock_type?: string;
+    print_type?: string;
+    unit_price?: number | null;
+    price_unit?: 'per_sqft' | 'per_qty';
+  }) => {
     try {
-      await api.stock.createBanner(data);
+      await api.stock.createBanner({
+        size_name: data.size_name,
+        stock_qty: data.stock_qty,
+        low_stock_threshold: data.low_stock_threshold ?? -1,
+        stock_type: (data.stock_type || '').trim(),
+        print_type: (data.print_type || '').trim(),
+        ...(typeof data.unit_price === 'number' && !isNaN(data.unit_price)
+          ? { unit_price: data.unit_price, price_unit: data.price_unit ?? 'per_sqft' }
+          : {}),
+      });
       fetchData();
       setAddBannerModal(false);
     } catch (err) {
@@ -139,9 +282,19 @@ export default function StockManagement() {
     }
   };
 
-  const handleAddStickerStock = async (data: { size_name: string; stock_qty: number; low_stock_threshold: number }) => {
+  const handleAddStickerStock = async (data: {
+    size_name: string;
+    stock_qty: number;
+    low_stock_threshold?: number;
+    stock_type?: string;
+  }) => {
     try {
-      await api.stock.createSticker(data);
+      await api.stock.createSticker({
+        size_name: data.size_name,
+        stock_qty: data.stock_qty,
+        low_stock_threshold: data.low_stock_threshold ?? -1,
+        stock_type: (data.stock_type || '').trim(),
+      });
       fetchData();
       setAddStickerModal(false);
     } catch (err) {
@@ -155,13 +308,52 @@ export default function StockManagement() {
     Promise.all([
       api.stock.frames(),
       api.stock.photos(),
+      api.stock.photocopy().catch(() => []),
+      api.stock.customItems().catch(() => []),
+      api.stock.customSections().catch(() => []),
       api.stock.transactions({ limit: '50' }),
       api.stock.banners().catch(() => []),
       api.stock.stickers().catch(() => []),
     ])
-      .then(([f, p, t, bs, ss]) => {
+      .then(([f, p, pc, ci, cs, t, bs, ss]) => {
         setFrames(f as StockItem[]);
         setPhotos(p as StockItem[]);
+        setPhotocopy(pc as StockItem[]);
+        const customRows = Array.isArray(ci)
+          ? (ci as {
+              id: number;
+              section_id: string;
+              size_name?: string;
+              stock_qty?: number;
+              low_stock_threshold?: number;
+              updated_at?: string;
+              item_type?: string;
+            }[])
+          : [];
+        const map: Record<string, StockItem[]> = {};
+        for (const r of customRows) {
+          const sid = r.section_id;
+          if (!sid) continue;
+          if (!map[sid]) map[sid] = [];
+          map[sid].push({
+            id: r.id,
+            size_name: r.size_name,
+            item_type: r.item_type,
+            stock_qty: r.stock_qty,
+            feet_remaining: (r as { feet_remaining?: number }).feet_remaining,
+            low_stock_threshold: r.low_stock_threshold,
+            updated_at: r.updated_at,
+          });
+        }
+        setCustomBySection(map);
+        const metaMap: Record<string, 'count' | 'roll'> = {};
+        for (const s of (Array.isArray(cs) ? cs : [])) {
+          const sid = (s as { section_id: string; section_type?: string }).section_id;
+          const stype = (s as { section_type?: string }).section_type;
+          if (!sid || (stype !== 'count' && stype !== 'roll')) continue;
+          metaMap[sid] = stype as 'count' | 'roll';
+        }
+        setCustomSectionsMeta(metaMap);
         setTransactions(Array.isArray(t) ? t : []);
         setBannerStock(Array.isArray(bs) ? bs : []);
         setStickerStock(Array.isArray(ss) ? ss : []);
@@ -176,29 +368,196 @@ export default function StockManagement() {
 
   const isLowStock = (item: StockItem, itemType?: string) => {
     if (!item) return false;
-    const label = activeTab.startsWith('custom-') ? getSectionLabel(activeTab, customLabels).toLowerCase() : '';
+    const isCustomTab = typeof activeTab === 'string' && activeTab.startsWith('custom-');
+    const label = isCustomTab ? getSectionLabel(activeTab, customLabels).toLowerCase() : '';
     const type = itemType ?? (activeTab === 'banner' || label === 'banner' ? 'banner' : activeTab === 'sticker' || label === 'sticker' ? 'sticker' : '');
+
+    const thresh = item.low_stock_threshold ?? 0;
+    if (thresh < 0) return false; // No low-stock tracking
+
+    // Custom roll sections: low_stock_threshold is stored in feet.
+    if (isCustomTab && customSectionsMeta[activeTab] === 'roll') {
+      const feet = (item as { feet_remaining?: number }).feet_remaining ?? ((item.stock_qty ?? 0) * 150);
+      return feet <= (thresh || 10);
+    }
+
     if (type === 'banner' || type === 'sticker') {
       const feet = (item as { feet_remaining?: number }).feet_remaining ?? ((item.stock_qty ?? 0) * 150);
-      return feet <= (item.low_stock_threshold ?? 10);
+      return feet <= (thresh || 10);
     }
-    return (item.stock_qty ?? 0) <= (item.low_stock_threshold ?? 0);
+    return (item.stock_qty ?? 0) <= thresh;
   };
 
-  const handleEditStock = (item: StockItem, itemType: string) => {
-    setStockModal({ type: 'edit', item, itemType });
+  const handleEditStock = (item: StockItem, itemType: string, isRollType = false) => {
+    setStockModal({ type: 'edit', item, itemType, isRollType });
   };
 
-  const handleAddItem = async (data: { size_name: string; frame_type?: string; stock_qty: number; low_stock_threshold: number }) => {
+  const handleRemoveBannerOrSticker = async (item: StockItem, type: 'banner' | 'sticker') => {
+    const label = type === 'banner' ? 'banner size' : 'sticker size';
+    if (!window.confirm(`Remove this ${label} (${item.size_name ?? item.material_name})? You can add it again later.`)) return;
+    setError('');
+    try {
+      if (type === 'banner') await api.stock.deleteBanner(item.id);
+      else await api.stock.deleteSticker(item.id);
+      fetchData();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const handleRemoveFrameOrPhoto = async (item: StockItem, type: 'frame' | 'photo') => {
+    const label = type === 'frame' ? 'frame size' : 'photo size';
+    const name = item.size_name ?? item.material_name ?? '';
+    if (!window.confirm(`Remove this ${label} (${name})? You can add it again later.`)) return;
+    setError('');
+    try {
+      if (type === 'frame') await api.stock.deleteFrame(item.id);
+      else await api.stock.deletePhoto(item.id);
+      fetchData();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const handleRemovePhotocopy = async (item: StockItem) => {
+    const name = item.size_name ?? item.material_name ?? '';
+    if (!window.confirm(`Remove this photocopy size (${name})? You can add it again later.`)) return;
+    setError('');
+    try {
+      await api.stock.deletePhotocopy(item.id);
+      fetchData();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const handleAddCustomSectionItem = async (data: {
+    size_name: string;
+    frame_type?: string;
+    stock_qty: number;
+    low_stock_threshold?: number;
+    item_type?: string;
+  }) => {
+    if (!customAddSectionId) return;
+    try {
+      await api.stock.createCustomSectionItem(customAddSectionId, {
+        size_name: data.size_name,
+        stock_qty: data.stock_qty,
+        low_stock_threshold: data.low_stock_threshold,
+        ...(data.item_type != null && String(data.item_type).trim() !== ''
+          ? { item_type: String(data.item_type).trim() }
+          : {}),
+      });
+      fetchData();
+      setCustomAddSectionId(null);
+      setCustomAddSectionKind(null);
+    } catch (err) {
+      setError((err as Error).message);
+      throw err;
+    }
+  };
+
+  const handleAddCustomSectionRollItem = async (data: {
+    size_name: string;
+    stock_qty: number;
+    low_stock_threshold?: number;
+    item_type?: string;
+  }) => {
+    if (!customAddSectionId) return;
+    try {
+      await api.stock.createCustomSectionItem(customAddSectionId, {
+        size_name: data.size_name,
+        stock_qty: data.stock_qty, // stored as rolls
+        low_stock_threshold: data.low_stock_threshold, // feet threshold
+        ...(data.item_type != null && String(data.item_type).trim() !== ''
+          ? { item_type: String(data.item_type).trim() }
+          : {}),
+      });
+      fetchData();
+      setCustomAddSectionId(null);
+      setCustomAddSectionKind(null);
+    } catch (err) {
+      setError((err as Error).message);
+      throw err;
+    }
+  };
+
+  const handleRemoveCustomSectionItem = async (item: StockItem) => {
+    const name = item.size_name ?? item.material_name ?? '';
+    if (!window.confirm(`Remove "${name}" from this section? You can add it again later.`)) return;
+    setError('');
+    try {
+      await api.stock.deleteCustomSectionItem(item.id);
+      fetchData();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const handleAddItem = async (data: { size_name: string; frame_type?: string; subitem_name?: string; stock_qty: number; low_stock_threshold?: number }) => {
     if (!addModal) return;
     try {
       if (addModal === 'frame') {
         await api.stock.createFrame(data);
-      } else {
+      } else if (addModal === 'photo') {
         await api.stock.createPhoto(data);
+      } else {
+        await api.stock.createPhotocopy(data);
       }
       fetchData();
       setAddModal(null);
+    } catch (err) {
+      setError((err as Error).message);
+      throw err;
+    }
+  };
+
+  const handleSaveBannerRow = async (
+    id: number,
+    data: {
+      size_name: string;
+      stock_qty: number;
+      feet_remaining: number;
+      low_stock_threshold: number;
+      stock_type: string;
+      print_type?: string;
+      unit_price?: number | null;
+      price_unit?: 'per_sqft' | 'per_qty';
+    }
+  ) => {
+    setError('');
+    try {
+      await api.stock.updateBanner(id, {
+        size_name: data.size_name,
+        stock_qty: data.stock_qty,
+        feet_remaining: data.feet_remaining,
+        low_stock_threshold: data.low_stock_threshold,
+        stock_type: data.stock_type,
+        print_type: data.print_type ?? '',
+        unit_price: data.unit_price === null || data.unit_price === undefined ? null : data.unit_price,
+        price_unit: data.price_unit ?? 'per_sqft',
+      });
+      fetchData();
+    } catch (err) {
+      setError((err as Error).message);
+      throw err;
+    }
+  };
+
+  const handleSaveStickerRow = async (
+    id: number,
+    data: {
+      size_name: string;
+      stock_qty: number;
+      feet_remaining: number;
+      low_stock_threshold: number;
+      stock_type: string;
+    }
+  ) => {
+    setError('');
+    try {
+      await api.stock.updateSticker(id, data);
+      fetchData();
     } catch (err) {
       setError((err as Error).message);
       throw err;
@@ -226,8 +585,18 @@ export default function StockManagement() {
 
   const frameNames: Record<number, string> = Object.fromEntries(frames.map((f) => [f.id, f.size_name ?? '']));
   const photoNames: Record<number, string> = Object.fromEntries(photos.map((p) => [p.id, p.size_name ?? '']));
+  const photocopyNames: Record<number, string> = Object.fromEntries(photocopy.map((p) => [p.id, p.size_name ?? '']));
   const bannerNames: Record<number, string> = Object.fromEntries(bannerStock.map((b) => [b.id, b.size_name ?? '']));
   const stickerNames: Record<number, string> = Object.fromEntries(stickerStock.map((s) => [s.id, s.size_name ?? '']));
+  const customNames: Record<number, string> = Object.fromEntries(
+    Object.values(customBySection)
+      .flat()
+      .map((it) => [it.id, it.size_name ?? ''] as const)
+  );
+
+  // Custom tabs are always backed by `custom_section_stock` (count/roll handled via `customSectionsMeta`).
+  // We intentionally do NOT map custom labels like "photocopy" to built-in stock tables.
+  const activeCustomType = null as null;
 
   return (
     <>
@@ -242,15 +611,35 @@ export default function StockManagement() {
 
         <div className="flex gap-2 mb-6 flex-wrap items-center">
           {enabledSections.map((tab) => (
-            <button
+            <div
               key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-lg font-medium ${
-                activeTab === tab ? 'bg-red-600 text-white' : 'bg-black/60 text-red-200/90 hover:bg-red-950/60'
+              className={`inline-flex items-stretch rounded-lg overflow-hidden border ${
+                activeTab === tab ? 'border-red-500/80' : 'border-red-950/50'
               }`}
             >
-              {getSectionLabel(tab, customLabels)}
-            </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`px-4 py-2 font-medium ${
+                  activeTab === tab ? 'bg-red-600 text-white' : 'bg-black/60 text-red-200/90 hover:bg-red-950/60'
+                }`}
+              >
+                {getSectionLabel(tab, customLabels)}
+              </button>
+              <button
+                type="button"
+                title={`Remove section: ${getSectionLabel(tab, customLabels)}`}
+                aria-label={`Remove section ${getSectionLabel(tab, customLabels)}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void removeSectionFromBar(tab);
+                }}
+                className="px-2.5 py-2 text-sm font-bold bg-red-950/70 text-red-200 hover:bg-red-900/90 border-l border-red-900/50"
+              >
+                ×
+              </button>
+            </div>
           ))}
           <div className="relative">
             <button
@@ -302,6 +691,7 @@ export default function StockManagement() {
                   items={frames}
                   itemType="frame"
                   onEdit={(item) => handleEditStock(item, 'frame')}
+                  onRemove={(item) => handleRemoveFrameOrPhoto(item, 'frame')}
                   isLowStock={isLowStock}
                 />
               </div>
@@ -319,6 +709,7 @@ export default function StockManagement() {
                   items={photos}
                   itemType="photo"
                   onEdit={(item) => handleEditStock(item, 'photo')}
+                  onRemove={(item) => handleRemoveFrameOrPhoto(item, 'photo')}
                   isLowStock={isLowStock}
                 />
               </div>
@@ -326,16 +717,22 @@ export default function StockManagement() {
 
             {activeTab === 'banner' && (
               <div className="bg-black/90 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-semibold text-white">Banner</h3>
-                  <button onClick={() => { setError(''); setAddBannerModal(true); }} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
+                <div className="flex justify-between items-center mb-2 gap-4">
+                  <div>
+                    <h3 className="font-semibold text-white">Banner rolls (physical stock)</h3>
+                    <p className="text-xs text-red-300/75 mt-1 max-w-3xl">
+                      Each row is one <span className="text-red-200/90">roll width</span> (e.g. 6 ft, 8 ft). Material pricing is in <span className="text-red-200/90">Settings → Banner</span>. On Billing you pick the material and roll width.
+                    </p>
+                  </div>
+                  <button onClick={() => { setError(''); setAddBannerModal(true); }} className="shrink-0 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
                     + Add Item
                   </button>
                 </div>
                 <StockTable
                   items={bannerStock}
                   itemType="banner"
-                  onEdit={(item) => handleEditStock(item, 'banner')}
+                  onSaveRollRow={handleSaveBannerRow}
+                  onRemove={(item) => handleRemoveBannerOrSticker(item, 'banner')}
                   isLowStock={isLowStock}
                 />
               </div>
@@ -343,16 +740,22 @@ export default function StockManagement() {
 
             {activeTab === 'sticker' && (
               <div className="bg-black/90 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-semibold text-white">Sticker</h3>
-                  <button onClick={() => { setError(''); setAddStickerModal(true); }} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
+                <div className="flex justify-between items-center mb-2 gap-4">
+                  <div>
+                    <h3 className="font-semibold text-white">Sticker rolls (physical stock)</h3>
+                    <p className="text-xs text-red-300/75 mt-1 max-w-3xl">
+                      Each row is one <span className="text-red-200/90">roll width</span>. Sticker material pricing is in <span className="text-red-200/90">Settings → Sticker</span>. On Billing you choose the material and roll width.
+                    </p>
+                  </div>
+                  <button onClick={() => { setError(''); setAddStickerModal(true); }} className="shrink-0 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
                     + Add Item
                   </button>
                 </div>
                 <StockTable
                   items={stickerStock}
                   itemType="sticker"
-                  onEdit={(item) => handleEditStock(item, 'sticker')}
+                  onSaveRollRow={handleSaveStickerRow}
+                  onRemove={(item) => handleRemoveBannerOrSticker(item, 'sticker')}
                   isLowStock={isLowStock}
                 />
               </div>
@@ -365,45 +768,121 @@ export default function StockManagement() {
                   transactions={transactions}
                   frameNames={frameNames}
                   photoNames={photoNames}
+                  photocopyNames={photocopyNames}
+                  customNames={customNames}
                   bannerNames={bannerNames}
                   stickerNames={stickerNames}
                 />
               </div>
             )}
 
-            {activeTab.startsWith('custom-') && (
+            {!activeTab && (
+              <div className="bg-black/90 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 p-6">
+                <h3 className="font-semibold text-white mb-2">No stock sections yet</h3>
+                <p className="text-red-300/75 text-sm">
+                  Use <span className="text-red-200/90 font-medium">+ Add Section</span> to start fresh.
+                </p>
+              </div>
+            )}
+
+            {typeof activeTab === 'string' && activeTab.startsWith('custom-') && (
               <div className="bg-black/90 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-semibold text-white">{getSectionLabel(activeTab, customLabels)}</h3>
-                  <button onClick={() => openAddModalForCustom(activeTab)} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
-                    + Add Item
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void removeSectionFromBar(activeTab);
+                      }}
+                      className="px-4 py-2 bg-red-950/80 text-red-200 rounded-lg hover:bg-red-900/90 text-sm border border-red-900/50"
+                    >
+                      Close Section
+                    </button>
+                    <button onClick={() => openAddModalForCustom(activeTab)} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">
+                      + Add Item
+                    </button>
+                  </div>
                 </div>
-                {getSectionLabel(activeTab, customLabels).toLowerCase() === 'banner' ? (
-                  <StockTable
-                    items={bannerStock}
-                    itemType="banner"
-                    onEdit={(item) => handleEditStock(item, 'banner')}
-                    isLowStock={isLowStock}
-                  />
-                ) : getSectionLabel(activeTab, customLabels).toLowerCase() === 'sticker' ? (
-                  <StockTable
-                    items={stickerStock}
-                    itemType="sticker"
-                    onEdit={(item) => handleEditStock(item, 'sticker')}
-                    isLowStock={isLowStock}
-                  />
-                ) : (
-                  <StockTable
-                    items={[]}
-                    itemType="photo"
-                    onEdit={() => {}}
-                    isLowStock={() => false}
-                  />
-                )}
+                <StockTable
+                  items={customBySection[activeTab] ?? []}
+                  itemType="custom"
+                  customRollMode={customSectionsMeta[activeTab] === 'roll'}
+                  onEdit={(item) => handleEditStock(item, 'custom', customSectionsMeta[activeTab] === 'roll')}
+                  onRemove={handleRemoveCustomSectionItem}
+                  isLowStock={isLowStock}
+                />
               </div>
             )}
           </>
+        )}
+
+        {customSectionTypeChoiceOpen && pendingSection && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-sm w-full p-6">
+              <h3 className="text-lg font-semibold mb-3 text-white">Section Type</h3>
+              <p className="text-sm text-red-300/70 mb-4">
+                Section: <span className="text-red-200/90 font-medium">{pendingSection.label}</span>
+              </p>
+              <div className="flex gap-3 mb-5">
+                <button
+                  type="button"
+                  onClick={() => setPendingCustomSectionType('count')}
+                  className={`flex-1 px-4 py-3 rounded-lg font-medium ${
+                    pendingCustomSectionType === 'count' ? 'bg-emerald-600 text-white' : 'bg-red-950/60 text-red-200'
+                  }`}
+                >
+                  Count Type
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingCustomSectionType('roll')}
+                  className={`flex-1 px-4 py-3 rounded-lg font-medium ${
+                    pendingCustomSectionType === 'roll' ? 'bg-emerald-600 text-white' : 'bg-red-950/60 text-red-200'
+                  }`}
+                >
+                  Roll Type
+                </button>
+              </div>
+              <p className="text-sm text-red-300/70 mb-2">Does this section affect sales?</p>
+              <div className="flex gap-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setPendingCustomSectionAffectsSales(true)}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium ${
+                    pendingCustomSectionAffectsSales ? 'bg-emerald-600 text-white' : 'bg-red-950/60 text-red-200'
+                  }`}
+                >
+                  Yes – items sold to customers
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingCustomSectionAffectsSales(false)}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium ${
+                    !pendingCustomSectionAffectsSales ? 'bg-emerald-600 text-white' : 'bg-red-950/60 text-red-200'
+                  }`}
+                >
+                  No – maintenance only (e.g. ink)
+                </button>
+              </div>
+              <div className="flex gap-2 justify-end mt-4">
+                <button
+                  type="button"
+                  onClick={cancelPendingCustomSection}
+                  className="px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { void confirmPendingCustomSection(); }}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {stockModal && (
@@ -411,38 +890,10 @@ export default function StockManagement() {
             type={stockModal.type}
             item={stockModal.item}
             itemType={stockModal.itemType}
+            isRollType={stockModal.isRollType}
             onClose={() => setStockModal(null)}
             onConfirm={handleStockModalConfirm}
           />
-        )}
-
-        {addTypeChoiceModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-sm w-full p-6">
-              <h3 className="text-lg font-semibold mb-4 text-white">Add Item</h3>
-              <p className="text-sm text-red-300/70 mb-4">Choose item type to add:</p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => { setAddTypeChoiceModal(false); setAddModal('frame'); }}
-                  className="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
-                >
-                  Add as Frame
-                </button>
-                <button
-                  onClick={() => { setAddTypeChoiceModal(false); setAddModal('photo'); }}
-                  className="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
-                >
-                  Add as Photo
-                </button>
-              </div>
-              <button
-                onClick={() => setAddTypeChoiceModal(false)}
-                className="mt-4 w-full px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
         )}
 
         {addModal && (
@@ -450,6 +901,24 @@ export default function StockManagement() {
             itemType={addModal}
             onClose={() => setAddModal(null)}
             onConfirm={handleAddItem}
+            onError={(msg) => setError(msg)}
+          />
+        )}
+
+        {customAddSectionId && customAddSectionKind === 'count' && (
+          <AddItemModal
+            key={`${customAddSectionId}-count`}
+            itemType="custom"
+            onClose={() => { setCustomAddSectionId(null); setCustomAddSectionKind(null); }}
+            onConfirm={handleAddCustomSectionItem}
+            onError={(msg) => setError(msg)}
+          />
+        )}
+        {customAddSectionId && customAddSectionKind === 'roll' && (
+          <AddCustomRollItemModal
+            key={`${customAddSectionId}-roll`}
+            onClose={() => { setCustomAddSectionId(null); setCustomAddSectionKind(null); }}
+            onConfirm={handleAddCustomSectionRollItem}
             onError={(msg) => setError(msg)}
           />
         )}

@@ -38,6 +38,8 @@ export interface Customer {
 export interface BillableItem {
   type: string;
   name: string;
+  /** Primary product/subitem label for the bill "Item" column (material, service, stamp, etc.) */
+  itemLabel?: string;
   sizeName: string;
   sizeId: number;
   materialId?: number;
@@ -48,8 +50,22 @@ export interface BillableItem {
   unitPrice?: number;
   calcType: 'sqft' | 'sqft_direct' | 'fixed';
   frameId?: number;
+  /** Settings frame line: group rows (Class / Crystle / Duro…) for size picker */
+  frameGroupKey?: string;
   photoId?: number;
+  photocopyId?: number;
   stockQty?: number;
+  /** Physical stock row (banner/sticker roll) — distinct when same width, different type */
+  bannerStockId?: number;
+  stickerStockId?: number;
+  stockTypeLabel?: string;
+  /** Banner roll: print type from stock (e.g. normal, quality) — separate from physical stock_type */
+  printTypeLabel?: string;
+  feetRemaining?: number;
+  /** Custom section billing row */
+  sectionId?: string;
+  customItemId?: number | null;
+  serviceItemId?: number;
 }
 
 export interface ShopSettings {
@@ -95,4 +111,30 @@ export interface ActivityLogEntry {
   entity_id: number | null;
   details: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface DailyExpense {
+  id: number;
+  expense_date: string;
+  amount: number;
+  description: string | null;
+  created_at: string;
+}
+
+export interface DailyRevenueReport {
+  date: string;
+  income: number;
+  outcome: number;
+  finalRevenue: number;
+}
+
+export interface FinalRevenueReport {
+  period: 'daily' | 'weekly' | 'monthly';
+  from: string;
+  to: string;
+  date?: string;
+  month?: string;
+  income: number;
+  outcome: number;
+  finalRevenue: number;
 }
