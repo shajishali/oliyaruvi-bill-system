@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { focusNextOnEnter, preventMouseUpWhenSelecting, selectIfEmptyOrZero } from '../../utils/modalFormHelpers';
+import { buildSuggestions, ChoiceList, type StockChoice } from './previousChoices';
 
 interface AddStickerStockModalProps {
+  suggestions?: StockChoice[];
   onClose: () => void;
   onConfirm: (data: {
     size_name: string;
@@ -13,7 +15,7 @@ interface AddStickerStockModalProps {
   onError?: (message: string) => void;
 }
 
-export default function AddStickerStockModal({ onClose, onConfirm, onError }: AddStickerStockModalProps) {
+export default function AddStickerStockModal({ suggestions = [], onClose, onConfirm, onError }: AddStickerStockModalProps) {
   const [stockType, setStockType] = useState('');
   const [sizeName, setSizeName] = useState('');
   const [stockQty, setStockQty] = useState('0');
@@ -25,6 +27,7 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
   const widthRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
   const thresholdRef = useRef<HTMLInputElement>(null);
+  const choices = buildSuggestions(suggestions, stockType, sizeName, '');
 
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
@@ -80,7 +83,7 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-sticker-roll-title"
-        className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6 relative z-[1]"
+        className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-lg w-full p-6 relative z-[1] max-h-[90vh] overflow-y-auto"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
@@ -104,9 +107,19 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
               value={stockType}
               onChange={(e) => setStockType(e.target.value)}
               onKeyDown={(e) => focusNextOnEnter(e, widthRef)}
-              placeholder="e.g. Gloss, matte"
+              placeholder="Type a new name, or pick one below"
               className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
             />
+            <ChoiceList
+              label="Previous types"
+              options={choices.typeOptions}
+              selected={stockType}
+              onPick={(value) => {
+                setStockType(value);
+                widthRef.current?.focus();
+              }}
+            />
+            {choices.typeIsNew && <p className="mt-2 text-sm text-amber-200">New type “{choices.typedType}” will be saved when you click Add.</p>}
           </div>
           <div>
             <label htmlFor="add-sticker-width" className="block text-sm font-medium text-red-200/90 mb-1">
@@ -125,6 +138,30 @@ export default function AddStickerStockModal({ onClose, onConfirm, onError }: Ad
               className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
               required
             />
+            <ChoiceList
+              label={stockType.trim() ? 'Widths for this type' : 'Previous widths'}
+              options={choices.sizeOptions}
+              selected={sizeName}
+              onPick={(value) => {
+                setSizeName(value);
+                qtyRef.current?.focus();
+              }}
+            />
+            {stockType.trim() && (
+              <ChoiceList
+                label="Other widths"
+                options={choices.otherSizeOptions}
+                selected={sizeName}
+                onPick={(value) => {
+                  setSizeName(value);
+                  qtyRef.current?.focus();
+                }}
+              />
+            )}
+            {choices.sizeIsNew && <p className="mt-2 text-sm text-amber-200">New width “{sizeName.trim()}” will be saved when you click Add.</p>}
+            {choices.alreadyExists && (
+              <p className="mt-2 text-sm text-red-200">This type and width is already in stock. Edit that row, or choose a different width.</p>
+            )}
           </div>
           <div>
             <label htmlFor="add-sticker-qty" className="block text-sm font-medium text-red-200/90 mb-1">

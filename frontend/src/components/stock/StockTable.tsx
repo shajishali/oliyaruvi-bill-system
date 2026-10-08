@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatSizeDisplay, getFirstNumberFromSize, normalizeRollWidthForSave } from '../../utils/sizeFormat';
+import { requestAdminPermission } from '../admin/AdminPermission';
 
 /** Display a roll width: always shows "N ft" (strips any existing "feet"/"ft" suffix first). */
 function formatRollWidth(size: string | undefined | null): string {
@@ -128,6 +129,13 @@ export default function StockTable({
   }, [items, editingId]);
 
   const beginRollEdit = (item: StockItem) => {
+    void (async () => {
+      if (!(await requestAdminPermission({ force: true }))) return;
+      openRollEdit(item);
+    })();
+  };
+
+  const openRollEdit = (item: StockItem) => {
     const feet = item.feet_remaining ?? (item.stock_qty ?? 0) * 150;
     setEditingId(item.id);
     setDraft({

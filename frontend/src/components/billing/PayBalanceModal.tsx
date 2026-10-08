@@ -8,7 +8,10 @@ interface PayBalanceModalProps {
 }
 
 export default function PayBalanceModal({ bill, onClose, onPaid }: PayBalanceModalProps) {
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(() => {
+    const due = (parseFloat(String(bill.total)) || 0) - (bill.amount_paid ?? 0);
+    return due > 0 ? due.toFixed(2) : '';
+  });
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Bank'>(bill.payment_method === 'Bank' ? 'Bank' : 'Cash');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');

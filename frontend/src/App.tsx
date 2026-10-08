@@ -8,7 +8,10 @@ import Dashboard from './pages/Dashboard';
 import Billing from './pages/Billing';
 import StockManagement from './pages/StockManagement';
 import Settings from './pages/Settings';
+import Prices from './pages/Prices';
 import Notifications from './pages/Notifications';
+import DayBook from './pages/DayBook';
+import Salary from './pages/Salary';
 
 export default function App() {
   return (
@@ -29,8 +32,11 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="billing" element={<Billing />} />
+        <Route path="day-book" element={<DayBook />} />
         <Route path="stock" element={<StockManagement />} />
+        <Route path="prices" element={<Prices />} />
         <Route path="notifications" element={<Notifications />} />
+        <Route path="salary" element={<Salary />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -94,13 +94,12 @@ function ensureBannerStickerStockTypeColumns() {
   }
 }
 
-// Seed only a new database. Reopening before registration must not reset defaults.
+// First install only. An update reopens the existing shop database and must not wipe it.
 function runSeed() {
   if (!isNewDatabase) return;
-  const seedPath = path.join(seedDir, 'seed.sql');
-  if (!fs.existsSync(seedPath)) return;
-
-  const sql = fs.readFileSync(seedPath, 'utf8');
+  const catalogPath = path.join(__dirname, '../db/setup-catalog.sql');
+  if (!fs.existsSync(catalogPath)) return;
+  const sql = fs.readFileSync(catalogPath, 'utf8');
   db.transaction(() => db.exec(sql))();
 }
 
@@ -207,3 +206,4 @@ stripDefaultBannerDataIfNotConfigured();
 runSeed();
 
 module.exports = db;
+module.exports.dbDir = dbDir;

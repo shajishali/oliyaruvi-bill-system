@@ -4,6 +4,8 @@ node_modules/
 # Database
 *.db
 database/*.db
+database/shop-logo.png
+database/shop-logo.jpg
 
 # Build outputs
 dist/

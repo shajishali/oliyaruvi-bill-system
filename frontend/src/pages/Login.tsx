@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 export default function Login() {
   const { isAuthenticated } = useAuth();
   if (isAuthenticated) return <Navigate to="/app" replace />;
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -16,7 +16,7 @@ export default function Login() {
     e.preventDefault();
     setError('');
     setSubmitting(true);
-    const result = login(email, password);
+    const result = login(username, password);
     if (result.success) {
       navigate('/app');
     } else {
@@ -31,13 +31,14 @@ export default function Login() {
       {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-red-200/90 mb-1">Email</label>
+          <label className="block text-sm font-medium text-red-200/90 mb-1">Username</label>
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
             className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-            placeholder="e.g. name@example.com"
+            placeholder="Enter your username"
+            autoComplete="username"
             required
           />
         </div>

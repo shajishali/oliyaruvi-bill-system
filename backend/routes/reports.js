@@ -211,20 +211,19 @@ router.get('/final-revenue', (req, res) => {
     let fromStr, toStr;
 
     if (period === 'daily') {
-      const d = date || new Date().toISOString().slice(0, 10);
+      const d = date || localDay(new Date());
       fromStr = toStr = d;
     } else if (period === 'weekly') {
-      const end = to ? new Date(to) : new Date();
-      const start = from ? new Date(from) : (() => { const x = new Date(end); x.setDate(x.getDate() - 6); return x; })();
-      fromStr = start.toISOString().slice(0, 10);
-      toStr = end.toISOString().slice(0, 10);
+      const end = to ? new Date(`${to}T00:00:00`) : new Date();
+      const start = from ? new Date(`${from}T00:00:00`) : (() => { const x = new Date(end); x.setDate(x.getDate() - 6); return x; })();
+      fromStr = localDay(start);
+      toStr = localDay(end);
     } else if (period === 'monthly') {
-      const m = month || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+      const m = month || localDay(new Date()).slice(0, 7);
       const [y, mo] = m.split('-').map(Number);
-      const start = new Date(y, mo - 1, 1);
       const end = new Date(y, mo, 0);
-      fromStr = start.toISOString().slice(0, 10);
-      toStr = end.toISOString().slice(0, 10);
+      fromStr = `${y}-${String(mo).padStart(2, '0')}-01`;
+      toStr = localDay(end);
     } else {
       return res.status(400).json({ error: 'Invalid period: daily, weekly, monthly' });
     }
@@ -242,6 +241,180 @@ router.get('/final-revenue', (req, res) => {
       income,
       outcome,
       finalRevenue,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function localDay(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function showBookDate(value) {
+  const [year, month, day] = String(value || '').split('-');
+  return day && month && year ? `${day}/${month}/${year}` : value;
+}
+
+function paymentReason(row) {
+  const sameDay = row.bill_date === row.paid_at;
+  const who = row.customer_name || 'customer';
+  if (!sameDay) {
+    return `Balance for ${row.bill_number} (${who}), billed on ${showBookDate(row.bill_date)}. Added on this pay date. Pending on the bill date is reduced.`;
+  }
+  if (row.payment_type === 'balance') return `Balance paid the same day for ${row.bill_number} (${who}).`;
+  return `Taken with order ${row.bill_number} (${who}).`;
+}
+
+function loadDayBookPayments() {
+  const bills = db.prepare(`
+    SELECT b.id, b.bill_number, b.bill_date, b.customer_name, b.total, b.amount_paid, b.payment_method, b.notes,
+           c.phone AS customer_phone
+    FROM bills b
+    LEFT JOIN customers c ON b.customer_id = c.id
+    ORDER BY b.bill_date, b.id
+  `).all();
+  let stored = [];
+  try {
+    stored = db.prepare(`
+      SELECT bill_id, amount, paid_at, payment_method, payment_type
+      FROM payment_transactions
+      ORDER BY paid_at, id
+    `).all();
+  } catch (_) {}
+  const byBill = new Map();
+  for (const row of stored) {
+    const list = byBill.get(row.bill_id) || [];
+    list.push({
+      amount: roundMoney(row.amount),
+      paid_at: row.paid_at,
+      payment_method: row.payment_method === 'Bank' ? 'Bank' : 'Cash',
+      payment_type: row.payment_type === 'balance' ? 'balance' : 'advance',
+    });
+    byBill.set(row.bill_id, list);
+  }
+  for (const bill of bills) {
+    const list = byBill.get(bill.id) || [];
+    const recorded = list.reduce((sum, row) => sum + row.amount, 0);
+    const missing = roundMoney((bill.amount_paid || 0) - recorded);
+    if (missing > 0.009) {
+      list.unshift({
+        amount: missing,
+        paid_at: bill.bill_date,
+        payment_method: String(bill.payment_method || 'Cash').toLowerCase() === 'bank' ? 'Bank' : 'Cash',
+        payment_type: 'advance',
+      });
+    }
+    bill.payments = list.map((row) => ({
+      ...row,
+      bill_number: bill.bill_number,
+      bill_date: bill.bill_date,
+      customer_name: bill.customer_name,
+      reason: paymentReason({ ...row, bill_number: bill.bill_number, bill_date: bill.bill_date, customer_name: bill.customer_name }),
+    }));
+    bill.pending = roundMoney(Math.max(0, (bill.total || 0) - (bill.amount_paid || 0)));
+  }
+  return bills;
+}
+
+// View-only day summary. Collections follow the pay date. Pending stays on the bill date.
+router.get('/day-book', (req, res) => {
+  try {
+    const today = (() => {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    })();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : today;
+    const bills = loadDayBookPayments();
+    const itemStmt = db.prepare('SELECT item_name, size, quantity, unit_price, subtotal FROM bill_items WHERE bill_id = ?');
+    let expenses = [];
+    try {
+      expenses = db.prepare('SELECT id, expense_date, amount, description FROM daily_expenses ORDER BY expense_date, id').all();
+    } catch (_) {}
+
+    const dayMap = new Map();
+    const ensureDay = (day) => {
+      if (!dayMap.has(day)) {
+        dayMap.set(day, { date: day, orderCount: 0, orderTotal: 0, pending: 0, cash: 0, bank: 0, expenses: 0 });
+      }
+      return dayMap.get(day);
+    };
+    for (const bill of bills) {
+      const day = ensureDay(bill.bill_date);
+      day.orderCount += 1;
+      day.orderTotal = roundMoney(day.orderTotal + (bill.total || 0));
+      day.pending = roundMoney(day.pending + bill.pending);
+      for (const payment of bill.payments) {
+        const payDay = ensureDay(payment.paid_at);
+        if (payment.payment_method === 'Bank') payDay.bank = roundMoney(payDay.bank + payment.amount);
+        else payDay.cash = roundMoney(payDay.cash + payment.amount);
+      }
+    }
+    for (const expense of expenses) ensureDay(expense.expense_date).expenses = roundMoney(ensureDay(expense.expense_date).expenses + (expense.amount || 0));
+
+    const orders = bills.filter((bill) => bill.bill_date === date).map((bill) => {
+      const onDate = bill.payments.filter((payment) => payment.paid_at === bill.bill_date);
+      const later = bill.payments.filter((payment) => payment.paid_at !== bill.bill_date);
+      const sumMethod = (rows, method) => roundMoney(rows.filter((row) => row.payment_method === method).reduce((sum, row) => sum + row.amount, 0));
+      return {
+        id: bill.id,
+        bill_number: bill.bill_number,
+        bill_date: bill.bill_date,
+        customer_name: bill.customer_name,
+        customer_phone: bill.customer_phone || null,
+        total: roundMoney(bill.total),
+        pending: bill.pending,
+        notes: bill.notes || null,
+        cash: sumMethod(onDate, 'Cash'),
+        bank: sumMethod(onDate, 'Bank'),
+        items: itemStmt.all(bill.id),
+        laterPayments: later,
+      };
+    });
+    const received = bills.flatMap((bill) => bill.payments.filter((payment) => payment.paid_at === date).map((payment) => ({
+      bill_number: payment.bill_number,
+      bill_date: payment.bill_date,
+      customer_name: payment.customer_name,
+      customer_phone: bill.customer_phone || null,
+      amount: payment.amount,
+      payment_method: payment.payment_method,
+      payment_type: payment.payment_type,
+      paid_at: payment.paid_at,
+      reason: payment.reason,
+    })));
+    const dayExpenses = expenses.filter((expense) => expense.expense_date === date).map((expense) => ({
+      ...expense,
+      amount: roundMoney(expense.amount),
+    }));
+    const cash = roundMoney(received.filter((row) => row.payment_method === 'Cash').reduce((sum, row) => sum + row.amount, 0));
+    const bank = roundMoney(received.filter((row) => row.payment_method === 'Bank').reduce((sum, row) => sum + row.amount, 0));
+    const expenseTotal = roundMoney(dayExpenses.reduce((sum, row) => sum + row.amount, 0));
+    const days = [...dayMap.values()]
+      .map((day) => ({ ...day, collected: roundMoney(day.cash + day.bank), moneyBox: roundMoney(day.cash + day.bank - day.expenses) }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    res.json({
+      date,
+      orderCount: orders.length,
+      orderTotal: roundMoney(orders.reduce((sum, order) => sum + order.total, 0)),
+      pending: roundMoney(orders.reduce((sum, order) => sum + order.pending, 0)),
+      cash,
+      bank,
+      collected: roundMoney(cash + bank),
+      expenseTotal,
+      moneyBox: roundMoney(cash + bank - expenseTotal),
+      orders,
+      received,
+      expenses: dayExpenses,
+      days,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -292,7 +465,9 @@ router.get('/activity', (req, res) => {
       sql += ' AND date(created_at) <= ?';
       params.push(to);
     }
-    sql += ' ORDER BY created_at DESC LIMIT 500';
+    const requested = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 2000) : 500;
+    sql += ` ORDER BY created_at DESC LIMIT ${limit}`;
 
     const rows = db.prepare(sql).all(...params);
     const activities = rows.map((r) => ({

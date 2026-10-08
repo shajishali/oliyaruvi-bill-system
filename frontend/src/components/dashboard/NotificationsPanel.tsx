@@ -33,9 +33,9 @@ export default function NotificationsPanel() {
             </div>
             <button
               onClick={() => markRead(n.id)}
-              className="text-xs text-red-600 hover:text-red-700 font-medium shrink-0"
+              className="shrink-0 rounded-md bg-red-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600"
             >
-              Dismiss
+              Mark as read
             </button>
           </li>
         ))}

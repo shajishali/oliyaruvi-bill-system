@@ -52,7 +52,9 @@ router.put('/:id/pay-balance', (req, res) => {
     const newPaid = Math.min(bill.total, (bill.amount_paid || 0) + payAmount);
     if (payAmount <= 0) return res.status(400).json({ error: 'Amount must be greater than 0' });
 
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
     db.prepare('UPDATE bills SET amount_paid = ? WHERE id = ?').run(newPaid, bill.id);
     try {
       db.prepare(`
@@ -60,7 +62,12 @@ router.put('/:id/pay-balance', (req, res) => {
         VALUES (?, ?, ?, ?, 'balance')
       `).run(bill.id, payAmount, today, method === 'Bank' ? 'Bank' : 'Cash');
     } catch (_) { /* table may not exist yet */ }
-    log('bill_balance_paid', 'bill', bill.id, { bill_number: bill.bill_number, amount: payAmount });
+    log('bill_balance_paid', 'bill', bill.id, {
+      bill_number: bill.bill_number,
+      customer_name: bill.customer_name,
+      amount: payAmount,
+      payment_method: method,
+    });
     const updated = db.prepare('SELECT b.*, c.phone as customer_phone FROM bills b LEFT JOIN customers c ON b.customer_id = c.id WHERE b.id = ?').get(bill.id);
     const items = enrichItemsWithStockRefs(bill, db.prepare('SELECT * FROM bill_items WHERE bill_id = ?').all(bill.id));
     let payment_transactions = [];
@@ -152,6 +159,12 @@ router.post('/', (req, res) => {
     if (!customer_name || !items?.length || !payment_method) {
       return res.status(400).json({ error: 'customer_name, items, and payment_method required' });
     }
+    const counterShift = db.prepare(`
+      SELECT id, staff_name FROM counter_shifts WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1
+    `).get();
+    if (!counterShift) {
+      return res.status(400).json({ error: 'Choose who is at the counter before saving the bill.' });
+    }
 
     let finalCustomerId = customer_id || null;
     const cleanPhone = String(customer_phone || '').trim();
@@ -186,9 +199,9 @@ router.post('/', (req, res) => {
 
     const createBill = db.transaction(() => {
       const result = db.prepare(`
-        INSERT INTO bills (bill_number, bill_date, customer_id, customer_name, subtotal, discount, total, payment_method, notes, amount_paid)
-        VALUES (?, ?, ?, ?, 0, ?, 0, ?, ?, 0)
-      `).run(bill_number, bill_date, finalCustomerId, customer_name, discount, payment_method, notes || null);
+        INSERT INTO bills (bill_number, bill_date, customer_id, customer_name, subtotal, discount, total, payment_method, notes, amount_paid, counter_staff_name, counter_shift_id)
+        VALUES (?, ?, ?, ?, 0, ?, 0, ?, ?, 0, ?, ?)
+      `).run(bill_number, bill_date, finalCustomerId, customer_name, discount, payment_method, notes || null, counterShift.staff_name, counterShift.id);
 
       const billId = result.lastInsertRowid;
 
@@ -196,7 +209,8 @@ router.post('/', (req, res) => {
         const st = item.subtotal ?? ((item.quantity || 1) * (item.unit_price || 0) - (item.discount || 0));
         subtotal += st;
         const itemDiscount = item.discount ?? 0;
-        insertItem.run(billId, item.service_type, item.item_name, item.size || null, item.quantity || 1, item.unit_price, itemDiscount, st, item.metadata ? JSON.stringify(item.metadata) : null);
+        const metadataJson = prepareItemStockRefs(item);
+        insertItem.run(billId, item.service_type, item.item_name, item.size || null, item.quantity || 1, item.unit_price, itemDiscount, st, metadataJson);
 
         // Stock reduction: prices come from Settings; billing decreases stock on save.
         // Frames: simple qty decrease
@@ -359,7 +373,7 @@ router.post('/', (req, res) => {
 
     const created = createBill();
     const bill = db.prepare('SELECT b.*, c.phone as customer_phone FROM bills b LEFT JOIN customers c ON b.customer_id = c.id WHERE b.id = ?').get(created.id);
-    log('bill_created', 'bill', created.id, { bill_number: created.bill_number, customer_name: customer_name, total: bill.total });
+    log('bill_created', 'bill', created.id, { bill_number: created.bill_number, customer_name: customer_name, total: bill.total, staff_name: counterShift.staff_name });
     const billItems = db.prepare('SELECT * FROM bill_items WHERE bill_id = ?').all(created.id);
     let payment_transactions = [];
     try {
@@ -461,6 +475,73 @@ function parseItemMeta(item) {
   return item.metadata || {};
 }
 
+function compactSizeKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\(in\)/gi, '')
+    .replace(/inch(es)?/gi, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function dimensionKey(value) {
+  const m = String(value || '').match(/(\d+(?:\.\d+)?)\s*[xX×+]\s*(\d+(?:\.\d+)?)/);
+  if (!m) return '';
+  return `${parseFloat(m[1])}x${parseFloat(m[2])}`;
+}
+
+/** Match a billed frame line to a stock row when the client did not send a stock id. */
+function resolveFrameStockId(item) {
+  const frames = db.prepare('SELECT id, size_name, frame_type, subitem_name FROM frame_sizes').all();
+  const size = String(item.size || '');
+  const name = String(item.item_name || '');
+  const paren = name.match(/\(([^)]+)\)\s*$/);
+  const typeHint = paren ? String(paren[1]).trim().toLowerCase() : '';
+  const key = compactSizeKey(size);
+  const dim = dimensionKey(size) || dimensionKey(name);
+  let candidates = key ? frames.filter((f) => compactSizeKey(f.size_name) === key) : [];
+  if (!candidates.length && dim) {
+    candidates = frames.filter((f) => dimensionKey(f.size_name) === dim);
+  }
+  if (!candidates.length) return null;
+  if (typeHint) {
+    const typed = candidates.filter((f) => {
+      const ft = String(f.frame_type || '').trim().toLowerCase();
+      const sub = String(f.subitem_name || '').trim().toLowerCase();
+      return ft === typeHint || sub === typeHint;
+    });
+    if (typed.length) return typed[0].id;
+  }
+  return candidates[0].id;
+}
+
+/** Keep the stock row id on the saved line, and on the item used to decrease stock. */
+function prepareItemStockRefs(item) {
+  const meta = parseItemMeta(item);
+  if (item.service_type === 'frame') {
+    const id = Number(item.frame_id || meta.frame_id) || resolveFrameStockId(item);
+    if (id) {
+      item.frame_id = id;
+      meta.frame_id = id;
+    }
+  }
+  if (item.service_type === 'photo') {
+    const id = Number(item.photo_id || meta.photo_id) || 0;
+    if (id) {
+      item.photo_id = id;
+      meta.photo_id = id;
+    }
+  }
+  if (item.service_type === 'photocopy') {
+    const id = Number(item.photocopy_id || meta.photocopy_id) || 0;
+    if (id) {
+      item.photocopy_id = id;
+      meta.photocopy_id = id;
+    }
+  }
+  return Object.keys(meta).length ? JSON.stringify(meta) : null;
+}
+
 function reduceEditedItemStock(item, billNumber) {
   const meta = parseItemMeta(item);
   const logStockTx = db.prepare(`
@@ -469,34 +550,43 @@ function reduceEditedItemStock(item, billNumber) {
   `);
   const qty = parseFloat(String(item.quantity)) || 0;
 
-  if (item.service_type === 'frame' && meta.frame_id) {
-    const row = db.prepare('SELECT stock_qty FROM frame_sizes WHERE id = ?').get(meta.frame_id);
-    if (!row) return;
-    const prevQty = Number(row.stock_qty || 0);
-    if (qty > prevQty) throw insufficientStock(`Not enough frame stock for ${item.item_name}`);
-    const newQty = prevQty - qty;
-    db.prepare('UPDATE frame_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, meta.frame_id);
-    logStockTx.run('frame', meta.frame_id, qty, prevQty, newQty, `Bill #${billNumber}`);
+  if (item.service_type === 'frame') {
+    const frameId = Number(item.frame_id || meta.frame_id) || resolveFrameStockId(item);
+    if (frameId) {
+      const row = db.prepare('SELECT stock_qty FROM frame_sizes WHERE id = ?').get(frameId);
+      if (!row) return;
+      const prevQty = Number(row.stock_qty || 0);
+      if (qty > prevQty) throw insufficientStock(`Not enough frame stock for ${item.item_name}`);
+      const newQty = prevQty - qty;
+      db.prepare('UPDATE frame_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, frameId);
+      logStockTx.run('frame', frameId, qty, prevQty, newQty, `Bill #${billNumber}`);
+    }
   }
 
-  if (item.service_type === 'photo' && meta.photo_id) {
-    const row = db.prepare('SELECT stock_qty FROM photo_sizes WHERE id = ?').get(meta.photo_id);
-    if (!row) return;
-    const prevQty = Number(row.stock_qty || 0);
-    if (qty > prevQty) throw insufficientStock(`Not enough photo stock for ${item.item_name}`);
-    const newQty = prevQty - qty;
-    db.prepare('UPDATE photo_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, meta.photo_id);
-    logStockTx.run('photo', meta.photo_id, qty, prevQty, newQty, `Bill #${billNumber}`);
+  if (item.service_type === 'photo') {
+    const photoId = Number(item.photo_id || meta.photo_id) || 0;
+    if (photoId) {
+      const row = db.prepare('SELECT stock_qty FROM photo_sizes WHERE id = ?').get(photoId);
+      if (!row) return;
+      const prevQty = Number(row.stock_qty || 0);
+      if (qty > prevQty) throw insufficientStock(`Not enough photo stock for ${item.item_name}`);
+      const newQty = prevQty - qty;
+      db.prepare('UPDATE photo_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, photoId);
+      logStockTx.run('photo', photoId, qty, prevQty, newQty, `Bill #${billNumber}`);
+    }
   }
 
-  if (item.service_type === 'photocopy' && meta.photocopy_id) {
-    const row = db.prepare('SELECT stock_qty FROM photocopy_sizes WHERE id = ?').get(meta.photocopy_id);
-    if (!row) return;
-    const prevQty = Number(row.stock_qty || 0);
-    if (qty > prevQty) throw insufficientStock(`Not enough photocopy stock for ${item.item_name}`);
-    const newQty = prevQty - qty;
-    db.prepare('UPDATE photocopy_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, meta.photocopy_id);
-    logStockTx.run('photocopy', meta.photocopy_id, qty, prevQty, newQty, `Bill #${billNumber}`);
+  if (item.service_type === 'photocopy') {
+    const photocopyId = Number(item.photocopy_id || meta.photocopy_id) || 0;
+    if (photocopyId) {
+      const row = db.prepare('SELECT stock_qty FROM photocopy_sizes WHERE id = ?').get(photocopyId);
+      if (!row) return;
+      const prevQty = Number(row.stock_qty || 0);
+      if (qty > prevQty) throw insufficientStock(`Not enough photocopy stock for ${item.item_name}`);
+      const newQty = prevQty - qty;
+      db.prepare('UPDATE photocopy_sizes SET stock_qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newQty, photocopyId);
+      logStockTx.run('photocopy', photocopyId, qty, prevQty, newQty, `Bill #${billNumber}`);
+    }
   }
 
   if ((item.service_type === 'banner_roll' || item.service_type === 'banner') && meta.banner_stock_id && meta.pricing_unit !== 'per_qty') {
@@ -587,9 +677,10 @@ router.put('/:id', (req, res) => {
         const lineSubtotal = Math.max(0, Number(item.subtotal ?? (quantity * unitPrice - itemDiscount)) || 0);
         subtotal += lineSubtotal;
         const serviceType = item.service_type || 'manual';
-        const metadata = item.metadata ? (typeof item.metadata === 'string' ? item.metadata : JSON.stringify(item.metadata)) : null;
+        const line = { ...item, service_type: serviceType, quantity, unit_price: unitPrice, item_discount: itemDiscount, subtotal: lineSubtotal };
+        const metadata = prepareItemStockRefs(line);
         insertItem.run(billId, serviceType, item.item_name, item.size || null, quantity || 1, unitPrice, itemDiscount, lineSubtotal, metadata);
-        reduceEditedItemStock({ ...item, service_type: serviceType, quantity, unit_price: unitPrice, item_discount: itemDiscount, subtotal: lineSubtotal }, bill.bill_number);
+        reduceEditedItemStock(line, bill.bill_number);
       }
 
       const total = Math.max(0, subtotal - (Number(discount) || 0));
@@ -727,7 +818,12 @@ router.delete('/:id', (req, res) => {
       // 4) Delete the bill itself (bill_items will be removed via ON DELETE CASCADE)
       db.prepare('DELETE FROM bills WHERE id = ?').run(billId);
 
-      log('bill_deleted', 'bill', billId, { bill_number: billNumber });
+      log('bill_deleted', 'bill', billId, {
+        bill_number: billNumber,
+        customer_name: bill.customer_name,
+        total: bill.total,
+        amount_paid: bill.amount_paid,
+      });
     })();
 
     res.json({ success: true });

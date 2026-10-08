@@ -1,32 +1,26 @@
-import { useState, useEffect, ReactNode } from 'react';
+import { useState, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   ADMIN_USERNAME,
-  ADMIN_DEFAULT_PASSWORD,
   FORGOT_PASSWORD_EMAIL,
   ADMIN_AUTH_KEY,
-  ADMIN_PASSWORD_KEY,
+  getAdminPassword,
+  setAdminPassword,
 } from '../../constants/adminAuth';
 import { api } from '../../api/client';
-
-function getStoredPassword(): string {
-  try {
-    return localStorage.getItem(ADMIN_PASSWORD_KEY) || ADMIN_DEFAULT_PASSWORD;
-  } catch {
-    return ADMIN_DEFAULT_PASSWORD;
-  }
-}
-
-function setStoredPassword(p: string) {
-  localStorage.setItem(ADMIN_PASSWORD_KEY, p);
-}
 
 type Step = 'login' | 'forgot_email' | 'forgot_otp' | 'forgot_password';
 
 export default function AdminGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  const [authenticated, setAuthenticated] = useState(false);
+  const [authenticated, setAuthenticated] = useState(() => {
+    try {
+      return sessionStorage.getItem(ADMIN_AUTH_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -35,20 +29,17 @@ export default function AdminGate({ children }: { children: ReactNode }) {
   const [forgotEmail, setForgotEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpMethod, setOtpMethod] = useState<'resend' | 'gmail' | null>(null);
   const [sendingOtp, setSendingOtp] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    setAuthenticated(sessionStorage.getItem(ADMIN_AUTH_KEY) === 'true');
-  }, []);
-
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const stored = getStoredPassword();
+    const stored = getAdminPassword();
     if (username.trim() !== ADMIN_USERNAME) {
       setError('Invalid username');
       return;
@@ -102,21 +93,26 @@ export default function AdminGate({ children }: { children: ReactNode }) {
       setError('Password must be at least 4 characters');
       return;
     }
+    if (newPassword !== confirmPassword) {
+      setError('Password and confirmation do not match');
+      return;
+    }
     setSubmitting(true);
-    setStoredPassword(newPassword);
+    setAdminPassword(newPassword);
     sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
     setAuthenticated(true);
     setStep('login');
     setForgotEmail('');
     setOtp('');
     setNewPassword('');
+    setConfirmPassword('');
   };
 
   if (authenticated) return <>{children}</>;
 
   const modal = (
-    <div className="fixed inset-0 left-52 flex items-center justify-center z-50 p-6">
-      <div className="max-w-md w-full bg-black/95 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+      <div className="max-w-md w-full bg-black rounded-xl border border-red-800 p-6 shadow-xl relative">
         <button
           type="button"
           onClick={() => navigate('/app')}
@@ -125,9 +121,9 @@ export default function AdminGate({ children }: { children: ReactNode }) {
         >
           ✕
         </button>
-        <h2 className="text-xl font-bold text-white mb-4 text-center">Settings - Owner Login</h2>
-        <p className="text-sm text-red-300/70 mb-4 text-center">
-          Enter admin credentials to access Settings and Reports.
+        <h2 className="text-xl font-bold text-white mb-4 text-center">Owner Login</h2>
+        <p className="text-sm text-red-100 mb-4 text-center">
+          Enter the admin password to open Salary and Settings.
         </p>
 
         {step === 'login' && (
@@ -135,23 +131,23 @@ export default function AdminGate({ children }: { children: ReactNode }) {
             {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">Username</label>
+                <label className="block text-sm font-medium text-white mb-1">Username</label>
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300"
                   placeholder="admin"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">Password</label>
+                <label className="block text-sm font-medium text-white mb-1">Password</label>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300"
                   placeholder="••••"
                   required
                 />
@@ -187,12 +183,12 @@ export default function AdminGate({ children }: { children: ReactNode }) {
             {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleForgotEmail} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">Email</label>
+                <label className="block text-sm font-medium text-white mb-1">Email</label>
                 <input
                   type="email"
                   value={forgotEmail}
                   onChange={(e) => setForgotEmail(e.target.value)}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300"
                   placeholder="Enter owner email"
                   required
                 />
@@ -218,12 +214,12 @@ export default function AdminGate({ children }: { children: ReactNode }) {
             {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleVerifyOtp} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">Enter OTP</label>
+                <label className="block text-sm font-medium text-white mb-1">Enter OTP</label>
                 <input
                   type="text"
                   value={otp}
                   onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 text-center text-lg tracking-widest"
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300 text-center text-lg tracking-widest"
                   placeholder="000000"
                   maxLength={6}
                   required
@@ -241,13 +237,25 @@ export default function AdminGate({ children }: { children: ReactNode }) {
             {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
             <form onSubmit={handleResetPassword} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">New Password</label>
+                <label className="block text-sm font-medium text-white mb-1">New Password</label>
                 <input
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-300"
                   placeholder="Enter new password"
+                  minLength={4}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-1">Confirm Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-300"
+                  placeholder="Confirm new password"
                   minLength={4}
                   required
                 />

@@ -1,10 +1,16 @@
 import { useState, useEffect } from 'react';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { api } from '../../api/client';
 import type { DailyExpense, FinalRevenueReport } from '../../types';
+import { buildShopReport, downloadShopReport, viewShopReport } from '../../utils/shopReportPdf';
 
 type PeriodTab = 'monthly' | 'weekly' | 'daily';
+
+function localDay(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function getMonthParam(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -14,18 +20,15 @@ function getWeekRange(toDate: Date): { from: string; to: string } {
   const to = new Date(toDate);
   const from = new Date(to);
   from.setDate(from.getDate() - 6);
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-  };
+  return { from: localDay(from), to: localDay(to) };
 }
 
 export default function DailyRevenueCard() {
   const now = new Date();
   const [period, setPeriod] = useState<PeriodTab>('monthly');
   const [month, setMonth] = useState(getMonthParam(now));
-  const [weekTo, setWeekTo] = useState(now.toISOString().slice(0, 10));
-  const [date, setDate] = useState(now.toISOString().slice(0, 10));
+  const [weekTo, setWeekTo] = useState(localDay(now));
+  const [date, setDate] = useState(localDay(now));
   const [report, setReport] = useState<FinalRevenueReport | null>(null);
   const [expenses, setExpenses] = useState<DailyExpense[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,16 +39,14 @@ export default function DailyRevenueCard() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editAmount, setEditAmount] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [showReportTable, setShowReportTable] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [preparingReport, setPreparingReport] = useState(false);
 
   const weekRange = getWeekRange(new Date(weekTo));
   const fromTo = period === 'monthly'
     ? (() => {
         const [y, m] = month.split('-').map(Number);
-        const start = new Date(y, m - 1, 1);
         const end = new Date(y, m, 0);
-        return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+        return { from: `${y}-${String(m).padStart(2, '0')}-01`, to: localDay(end) };
       })()
     : period === 'weekly'
       ? weekRange
@@ -130,65 +131,18 @@ export default function DailyRevenueCard() {
     }
   };
 
-  const downloadPdf = () => {
-    setDownloadingPdf(true);
+  const openShopReport = async (mode: 'view' | 'download') => {
+    setPreparingReport(true);
     try {
-      const income = report?.income ?? 0;
-      const outcome = report?.outcome ?? 0;
-      const finalRevenue = report?.finalRevenue ?? 0;
-      const fromStr = report?.from ?? fromTo.from;
-      const toStr = report?.to ?? fromTo.to;
-      const periodTitle =
-        period === 'monthly'
-          ? `Month: ${month}`
-          : period === 'weekly'
-            ? `Week: ${fromStr} to ${toStr}`
-            : `Date: ${date}`;
-      const doc = new jsPDF();
-      doc.setFontSize(16);
-      doc.text('Final Revenue Report', 14, 15);
-      doc.setFontSize(10);
-      doc.text(periodTitle, 14, 22);
-      doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, 14, 28);
-
-      autoTable(doc, {
-        startY: 34,
-        head: [['Period', 'From', 'To', 'Income (Rs.)', 'Expenses (Rs.)', 'Final Revenue (Rs.)']],
-        body: [
-          [
-            period.charAt(0).toUpperCase() + period.slice(1),
-            fromStr,
-            toStr,
-            income.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
-            outcome.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
-            finalRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
-          ],
-        ],
-        theme: 'grid',
-      });
-
-      const tableEnd = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 50;
-      const expensesStartY = tableEnd + 10;
-      doc.setFontSize(12);
-      doc.text('Expenses', 14, expensesStartY);
-      autoTable(doc, {
-        startY: expensesStartY + 6,
-        head: [['Date', 'Amount (Rs.)', 'Description']],
-        body: expenses.length
-          ? expenses.map((e) => [
-              e.expense_date,
-              e.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
-              e.description || '—',
-            ])
-          : [['—', '—', 'No expenses']],
-        theme: 'grid',
-      });
-
-      doc.save(`final-revenue-${period}-${fromStr}-${toStr}.pdf`);
+      const from = report?.from ?? fromTo.from;
+      const to = report?.to ?? fromTo.to;
+      const doc = await buildShopReport(from, to);
+      if (mode === 'view') viewShopReport(doc);
+      else downloadShopReport(doc, from, to);
     } catch (err) {
-      alert((err as Error).message || 'Failed to generate PDF');
+      alert((err as Error).message || 'Could not prepare the report');
     } finally {
-      setDownloadingPdf(false);
+      setPreparingReport(false);
     }
   };
 
@@ -298,83 +252,24 @@ export default function DailyRevenueCard() {
         <div className="flex flex-wrap gap-2 mb-3">
           <button
             type="button"
-            onClick={() => setShowReportTable(!showReportTable)}
-            className="px-3 py-2 bg-red-950/50 text-red-200 rounded-lg hover:bg-red-950/70 text-sm"
+            onClick={() => openShopReport('view')}
+            disabled={preparingReport}
+            className="px-3 py-2 bg-red-950/50 text-red-200 rounded-lg hover:bg-red-950/70 disabled:opacity-50 text-sm"
           >
-            {showReportTable ? 'Hide table' : 'View report (table)'}
+            {preparingReport ? 'Preparing…' : 'View report'}
           </button>
           <button
             type="button"
-            onClick={downloadPdf}
-            disabled={downloadingPdf}
+            onClick={() => openShopReport('download')}
+            disabled={preparingReport}
             className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm"
           >
-            {downloadingPdf ? 'Generating…' : 'Download PDF'}
+            {preparingReport ? 'Preparing…' : 'Download PDF'}
           </button>
         </div>
-        {showReportTable && (
-          <div className="overflow-x-auto rounded-lg border border-red-950/40">
-            <table className="w-full text-sm">
-              <thead className="bg-red-950/50">
-                <tr>
-                  <th className="text-left p-2 text-red-200">Period</th>
-                  <th className="text-left p-2 text-red-200">From</th>
-                  <th className="text-left p-2 text-red-200">To</th>
-                  <th className="text-right p-2 text-red-200">Income (Rs.)</th>
-                  <th className="text-right p-2 text-red-200">Expenses (Rs.)</th>
-                  <th className="text-right p-2 text-red-200">Final Revenue (Rs.)</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-red-950/40 bg-red-950/20">
-                  <td className="p-2 text-red-200 capitalize">{period}</td>
-                  <td className="p-2 text-red-300/90">{report?.from ?? fromTo.from}</td>
-                  <td className="p-2 text-red-300/90">{report?.to ?? fromTo.to}</td>
-                  <td className="p-2 text-right text-emerald-400 font-medium">
-                    {(report?.income ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="p-2 text-right text-amber-400 font-medium">
-                    {(report?.outcome ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="p-2 text-right text-white font-bold">
-                    {(report?.finalRevenue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div className="mt-2 border-t border-red-950/40">
-              <p className="text-xs text-red-300/70 p-2">Expenses in period</p>
-              <table className="w-full text-sm">
-                <thead className="bg-red-950/40">
-                  <tr>
-                    <th className="text-left p-2 text-red-200">Date</th>
-                    <th className="text-right p-2 text-red-200">Amount (Rs.)</th>
-                    <th className="text-left p-2 text-red-200">Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {expenses.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="p-2 text-red-400/80 text-center">
-                        No expenses in this period
-                      </td>
-                    </tr>
-                  ) : (
-                    expenses.map((e) => (
-                      <tr key={e.id} className="border-t border-red-950/30">
-                        <td className="p-2 text-red-300/80">{e.expense_date}</td>
-                        <td className="p-2 text-right text-amber-400">
-                          {e.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="p-2 text-red-300/80">{e.description || '—'}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <p className="text-xs text-red-300/70">
+          View and Download open the same shop report that is emailed, for the period selected above.
+        </p>
       </div>
 
       <div className="border-t border-red-950/40 pt-4">

@@ -2,9 +2,13 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeSizeForSave } from '../../utils/sizeFormat';
 import { focusNextOnEnter, preventMouseUpWhenSelecting, selectIfEmptyOrZero } from '../../utils/modalFormHelpers';
+import { buildSuggestions, ChoiceList, type StockChoice } from './previousChoices';
+
+export type { StockChoice };
 
 interface AddItemModalProps {
   itemType: 'frame' | 'photo' | 'photocopy' | 'custom';
+  suggestions?: StockChoice[];
   onClose: () => void;
   onConfirm: (data: {
     size_name: string;
@@ -18,7 +22,7 @@ interface AddItemModalProps {
   onError?: (message: string) => void;
 }
 
-export default function AddItemModal({ itemType, onClose, onConfirm, onError }: AddItemModalProps) {
+export default function AddItemModal({ itemType, suggestions = [], onClose, onConfirm, onError }: AddItemModalProps) {
   const [sizeName, setSizeName] = useState('');
   const [customItemType, setCustomItemType] = useState('');
   const [frameType, setFrameType] = useState('');
@@ -31,6 +35,13 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
   const sizeInputRef = useRef<HTMLInputElement>(null);
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const thresholdInputRef = useRef<HTMLInputElement>(null);
+  const typeQuery = itemType === 'frame' ? frameType : customItemType;
+  const choices = buildSuggestions(
+    suggestions,
+    typeQuery,
+    sizeName,
+    itemType === 'photo' || itemType === 'photocopy' ? null : itemType === 'frame' ? 'Standard' : '',
+  );
 
   // Modal is portaled to body so it is not inside Layout's framer-motion wrapper (transform breaks fixed + can steal clicks).
   useEffect(() => {
@@ -44,7 +55,11 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sizeName.trim()) return;
+    if (!sizeName.trim()) {
+      setSubmitError('Enter a size.');
+      sizeInputRef.current?.focus();
+      return;
+    }
     const qty = parseInt(String(stockQty)) || 0;
     setSubmitError('');
     setSaving(true);
@@ -82,7 +97,7 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
 
   const modal = (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200] p-4"
+      className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4"
       role="presentation"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) e.preventDefault();
@@ -94,7 +109,7 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
       <div
         role="dialog"
         aria-modal="true"
-        className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6 relative z-[1]"
+        className="bg-neutral-950 rounded-xl shadow-xl border border-red-950/60 max-w-lg w-full p-6 relative z-[1] max-h-[90vh] overflow-y-auto"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
@@ -106,7 +121,13 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
             {submitError}
           </div>
         )}
-        <form onSubmit={handleSubmit} className="space-y-4" noValidate autoComplete="off">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="space-y-4"
+          noValidate
+          autoComplete="off"
+        >
           {(itemType === 'frame') && (
             <div>
               <label htmlFor="add-item-frame-type" className="block text-sm font-medium text-red-200/90 mb-1">Type</label>
@@ -116,9 +137,20 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
                 type="text"
                 value={frameType}
                 onChange={(e) => setFrameType(e.target.value)}
-                placeholder="e.g. Wood, Metal, Plastic (leave empty for Standard)"
-                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+                onKeyDown={(e) => focusNextOnEnter(e, sizeInputRef)}
+                placeholder="Type a new name, or pick one below"
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-400/70 focus:outline-none focus:border-red-600"
               />
+              <ChoiceList
+                label="Previous types"
+                options={choices.typeOptions}
+                selected={frameType}
+                onPick={(value) => {
+                  setFrameType(value);
+                  sizeInputRef.current?.focus();
+                }}
+              />
+              {choices.typeIsNew && <p className="mt-2 text-sm text-amber-200">New type “{choices.typedType}” will be saved when you click Add.</p>}
             </div>
           )}
           {itemType === 'custom' && (
@@ -134,8 +166,18 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
                 onChange={(e) => setCustomItemType(e.target.value)}
                 onKeyDown={(e) => focusNextOnEnter(e, sizeInputRef)}
                 placeholder="e.g. Normal, Large, B/W"
-                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-400/70 focus:outline-none focus:border-red-600"
               />
+              <ChoiceList
+                label="Previous types"
+                options={choices.typeOptions}
+                selected={customItemType}
+                onPick={(value) => {
+                  setCustomItemType(value);
+                  sizeInputRef.current?.focus();
+                }}
+              />
+              {choices.typeIsNew && <p className="mt-2 text-sm text-amber-200">New type “{choices.typedType}” will be saved when you click Add.</p>}
             </div>
           )}
           <div>
@@ -148,9 +190,33 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
               onChange={(e) => setSizeName(e.target.value)}
               onKeyDown={(e) => focusNextOnEnter(e, qtyInputRef)}
               placeholder={itemType === 'frame' ? 'e.g. 6 inches, 12x18 (match Settings)' : itemType === 'photocopy' ? 'e.g. A4' : itemType === 'custom' ? 'e.g. A4, 12x18' : 'e.g. 4x6'}
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-400/70 focus:outline-none focus:border-red-600"
               required
             />
+            <ChoiceList
+              label={typeQuery.trim() ? 'Sizes for this type' : 'Previous sizes'}
+              options={choices.sizeOptions}
+              selected={sizeName}
+              onPick={(value) => {
+                setSizeName(value);
+                qtyInputRef.current?.focus();
+              }}
+            />
+            {typeQuery.trim() && (
+              <ChoiceList
+                label="Other sizes"
+                options={choices.otherSizeOptions}
+                selected={sizeName}
+                onPick={(value) => {
+                  setSizeName(value);
+                  qtyInputRef.current?.focus();
+                }}
+              />
+            )}
+            {choices.sizeIsNew && <p className="mt-2 text-sm text-amber-200">New size “{sizeName.trim()}” will be saved when you click Add.</p>}
+            {choices.alreadyExists && (
+              <p className="mt-2 text-sm text-red-200">This type and size is already in stock. You can still add another row, or choose a different size.</p>
+            )}
           </div>
           <div>
             <label htmlFor="add-item-qty" className="block text-sm font-medium text-red-200/90 mb-1">Initial Qty</label>
@@ -166,7 +232,7 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
               onFocus={selectIfEmptyOrZero}
               onMouseUp={preventMouseUpWhenSelecting}
               onKeyDown={(e) => focusNextOnEnter(e, thresholdInputRef)}
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-400/70 focus:outline-none focus:border-red-600"
             />
           </div>
           <div>
@@ -180,7 +246,7 @@ export default function AddItemModal({ itemType, onClose, onConfirm, onError }: 
               placeholder="Leave empty to skip alerts"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value.replace(/\D/g, ''))}
-              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50 focus:outline-none focus:border-red-600"
+              className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black text-white placeholder-red-400/70 focus:outline-none focus:border-red-600"
             />
           </div>
           <div className="flex gap-2 justify-end pt-2">

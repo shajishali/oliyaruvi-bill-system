@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
+const { log } = require('../lib/activityLog');
+
+function normalizePriceAudience(value) {
+  return String(value || '').trim().toLowerCase() === 'st' ? 'st' : 'local';
+}
 
 /** Normalize for matching Settings sale rows to Stock `size_name` */
 function normalizeSizeMatchKey(s) {
@@ -117,14 +122,18 @@ router.get('/banner-materials', (req, res) => {
 
 router.post('/banner-materials', (req, res) => {
   try {
-    const { material_name, price_per_sqft, pricing_type } = req.body;
+    const { material_name, price_per_sqft, pricing_type, price_audience } = req.body;
     if (!material_name || !material_name.trim()) return res.status(400).json({ error: 'material_name required' });
     const price = parseFloat(price_per_sqft) || 0;
     const ptype = (pricing_type === 'per_qty') ? 'per_qty' : 'per_sqft';
-    const result = db.prepare('INSERT INTO banner_materials (material_name, price_per_sqft, pricing_type) VALUES (?, ?, ?)').run(material_name.trim(), price, ptype);
+    const audience = normalizePriceAudience(price_audience);
+    const result = db.prepare('INSERT INTO banner_materials (material_name, price_per_sqft, pricing_type, price_audience) VALUES (?, ?, ?, ?)').run(material_name.trim(), price, ptype, audience);
     const created = db.prepare('SELECT * FROM banner_materials WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(created);
   } catch (err) {
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(400).json({ error: 'This banner price already exists for that ST/Local choice.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -144,14 +153,18 @@ router.get('/sticker-materials', (req, res) => {
 
 router.post('/sticker-materials', (req, res) => {
   try {
-    const { material_name, price_per_sqft, pricing_type } = req.body;
+    const { material_name, price_per_sqft, pricing_type, price_audience } = req.body;
     if (!material_name || !material_name.trim()) return res.status(400).json({ error: 'material_name required' });
     const price = parseFloat(price_per_sqft) || 0;
     const ptype = (pricing_type === 'per_qty') ? 'per_qty' : 'per_sqft';
-    const result = db.prepare('INSERT INTO sticker_materials (material_name, price_per_sqft, pricing_type) VALUES (?, ?, ?)').run(material_name.trim(), price, ptype);
+    const audience = normalizePriceAudience(price_audience);
+    const result = db.prepare('INSERT INTO sticker_materials (material_name, price_per_sqft, pricing_type, price_audience) VALUES (?, ?, ?, ?)').run(material_name.trim(), price, ptype, audience);
     const created = db.prepare('SELECT * FROM sticker_materials WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(created);
   } catch (err) {
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(400).json({ error: 'This sticker price already exists for that ST/Local choice.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -167,7 +180,7 @@ router.delete('/sticker-materials/:id', (req, res) => {
 
 router.put('/sticker-materials/:id', (req, res) => {
   try {
-    const { material_name, price_per_sqft, pricing_type } = req.body;
+    const { material_name, price_per_sqft, pricing_type, price_audience } = req.body;
     const id = req.params.id;
     if (material_name !== undefined) {
       db.prepare('UPDATE sticker_materials SET material_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(material_name.trim(), id);
@@ -178,6 +191,9 @@ router.put('/sticker-materials/:id', (req, res) => {
     if (pricing_type !== undefined) {
       const ptype = (pricing_type === 'per_qty') ? 'per_qty' : 'per_sqft';
       db.prepare('UPDATE sticker_materials SET pricing_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(ptype, id);
+    }
+    if (price_audience !== undefined) {
+      db.prepare('UPDATE sticker_materials SET price_audience = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(normalizePriceAudience(price_audience), id);
     }
     const updated = db.prepare('SELECT * FROM sticker_materials WHERE id = ?').get(id);
     res.json(updated);
@@ -199,7 +215,7 @@ router.delete('/banner-materials/:id', (req, res) => {
 
 router.put('/banner-materials/:id', (req, res) => {
   try {
-    const { material_name, price_per_sqft, pricing_type } = req.body;
+    const { material_name, price_per_sqft, pricing_type, price_audience } = req.body;
     const id = req.params.id;
     if (material_name !== undefined) {
       db.prepare('UPDATE banner_materials SET material_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(material_name.trim(), id);
@@ -210,6 +226,9 @@ router.put('/banner-materials/:id', (req, res) => {
     if (pricing_type !== undefined) {
       const ptype = (pricing_type === 'per_qty') ? 'per_qty' : 'per_sqft';
       db.prepare('UPDATE banner_materials SET pricing_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(ptype, id);
+    }
+    if (price_audience !== undefined) {
+      db.prepare('UPDATE banner_materials SET price_audience = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(normalizePriceAudience(price_audience), id);
     }
     const updated = db.prepare('SELECT * FROM banner_materials WHERE id = ?').get(id);
     res.json(updated);
@@ -277,20 +296,27 @@ router.get('/frame-pricing', (req, res) => {
 
 router.post('/frame-pricing', (req, res) => {
   try {
-    const { size_name, frame_type = 'Duro', subitem_name = '', unit_price = 0 } = req.body;
+    const { size_name, frame_type = 'Duro', subitem_name = '', unit_price = 0, price_audience } = req.body;
     if (!size_name || !String(size_name).trim()) return res.status(400).json({ error: 'size_name required' });
     const ft = String(frame_type || 'Duro').trim() || 'Duro';
     const sub = String(subitem_name || '').trim();
     const price = parseFloat(String(unit_price)) || 0;
+    const audience = normalizePriceAudience(price_audience);
     const result = db.prepare(`
-      INSERT INTO frame_pricing (size_name, frame_type, subitem_name, unit_price)
-      VALUES (?, ?, ?, ?)
-    `).run(String(size_name).trim(), ft, sub, price);
+      INSERT INTO frame_pricing (size_name, frame_type, subitem_name, unit_price, price_audience)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(String(size_name).trim(), ft, sub, price, audience);
     const created = db.prepare('SELECT * FROM frame_pricing WHERE id = ?').get(result.lastInsertRowid);
+    log('price_added', 'price', created.id, {
+      item_name: [created.subitem_name || created.frame_type, created.size_name].filter(Boolean).join(' '),
+      size_name: created.size_name,
+      new_price: created.unit_price,
+      price_audience: created.price_audience,
+    });
     res.status(201).json(created);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(400).json({ error: 'A frame price with this size, type, and subitem already exists.' });
+      return res.status(400).json({ error: 'A frame price with this size, type, subitem, and ST/Local choice already exists.' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -301,7 +327,7 @@ router.put('/frame-pricing/:id', (req, res) => {
     const { id } = req.params;
     const row = db.prepare('SELECT * FROM frame_pricing WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Frame price not found' });
-    const { size_name, frame_type, subitem_name, unit_price } = req.body;
+    const { size_name, frame_type, subitem_name, unit_price, price_audience } = req.body;
     const updates = [];
     const params = [];
     if (size_name !== undefined && String(size_name).trim()) {
@@ -320,14 +346,25 @@ router.put('/frame-pricing/:id', (req, res) => {
       updates.push('unit_price = ?');
       params.push(parseFloat(String(unit_price)) || 0);
     }
+    if (price_audience !== undefined) {
+      updates.push('price_audience = ?');
+      params.push(normalizePriceAudience(price_audience));
+    }
     if (updates.length === 0) return res.status(400).json({ error: 'No updates provided' });
     params.push(id);
     db.prepare(`UPDATE frame_pricing SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...params);
     const updated = db.prepare('SELECT * FROM frame_pricing WHERE id = ?').get(id);
+    log('price_changed', 'price', updated.id, {
+      item_name: [updated.subitem_name || updated.frame_type, updated.size_name].filter(Boolean).join(' '),
+      size_name: updated.size_name,
+      old_price: row.unit_price,
+      new_price: updated.unit_price,
+      price_audience: updated.price_audience,
+    });
     res.json(updated);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(400).json({ error: 'A frame price with this size, type, and subitem already exists.' });
+      return res.status(400).json({ error: 'A frame price with this size, type, subitem, and ST/Local choice already exists.' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -335,8 +372,15 @@ router.put('/frame-pricing/:id', (req, res) => {
 
 router.delete('/frame-pricing/:id', (req, res) => {
   try {
-    const n = db.prepare('DELETE FROM frame_pricing WHERE id = ?').run(req.params.id);
-    if (n.changes === 0) return res.status(404).json({ error: 'Frame price not found' });
+    const row = db.prepare('SELECT * FROM frame_pricing WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Frame price not found' });
+    db.prepare('DELETE FROM frame_pricing WHERE id = ?').run(row.id);
+    log('price_removed', 'price', row.id, {
+      item_name: [row.subitem_name || row.frame_type, row.size_name].filter(Boolean).join(' '),
+      size_name: row.size_name,
+      old_price: row.unit_price,
+      price_audience: row.price_audience,
+    });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -448,6 +492,7 @@ router.get('/billable-items', (req, res) => {
           printTypeLabel: printTypeLabel || undefined,
           widthFt,
           feetRemaining: br.feet_remaining ?? 0,
+          priceAudience: normalizePriceAudience(bm.price_audience),
         };
         if (usePerQty) {
           items.push({
@@ -495,6 +540,7 @@ router.get('/billable-items', (req, res) => {
           feetRemaining: sr.feet_remaining ?? 0,
           pricePerSqft: sm.price_per_sqft,
           calcType: 'sqft_direct',
+          priceAudience: normalizePriceAudience(sm.price_audience),
         });
       });
     });
@@ -532,6 +578,7 @@ router.get('/billable-items', (req, res) => {
         materialId: bm.id,
         unitPrice: bm.price_per_sqft,
         calcType: 'fixed',
+        priceAudience: normalizePriceAudience(bm.price_audience),
       });
     });
     designBanner.forEach((d) => {
@@ -545,6 +592,7 @@ router.get('/billable-items', (req, res) => {
         sizeId: d.id,
         unitPrice: d.unit_price,
         calcType: 'fixed',
+        priceAudience: normalizePriceAudience(d.price_audience),
       });
     });
     designPhoto.forEach((d) => {
@@ -558,6 +606,7 @@ router.get('/billable-items', (req, res) => {
         sizeId: d.id,
         unitPrice: d.unit_price,
         calcType: 'fixed',
+        priceAudience: normalizePriceAudience(d.price_audience),
       });
     });
     framePricing.forEach((f) => {
@@ -584,6 +633,7 @@ router.get('/billable-items', (req, res) => {
         unitPrice: f.unit_price,
         stockQty: stockMatch != null ? stockMatch.stock_qty : 0,
         calcType: 'fixed',
+        priceAudience: normalizePriceAudience(f.price_audience),
       });
     });
     photocopies.forEach((p) => {
@@ -621,6 +671,7 @@ router.get('/billable-items', (req, res) => {
         serviceItemId: si.id,
         unitPrice: si.unit_price,
         calcType: isPerSqft ? 'sqft_direct' : 'fixed',
+        priceAudience: normalizePriceAudience(si.price_audience),
       });
     });
 
@@ -679,6 +730,7 @@ router.get('/billable-items', (req, res) => {
               sectionId: cs.section_id,
               unitPrice: sale.unit_price,
               pricePerSqft: sale.unit_price,
+              priceAudience: normalizePriceAudience(sale.price_audience),
               stockQty: cs.stock_qty,
               widthFt,
               calcType: 'sqft_direct',
@@ -722,6 +774,7 @@ router.get('/billable-items', (req, res) => {
               sectionId: sectionId,
               unitPrice: sale.unit_price,
               calcType: 'fixed',
+              priceAudience: normalizePriceAudience(sale.price_audience),
               stockQty: matchStock ? matchStock.stock_qty : totalSectionStock,
             });
           }
@@ -781,15 +834,21 @@ router.get('/service-items', (req, res) => {
 
 router.post('/service-items', (req, res) => {
   try {
-    const { name, item_type = '', qty_type = 'per_unit', unit_price = 0 } = req.body;
+    const { name, item_type = '', qty_type = 'per_unit', unit_price = 0, price_audience } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
     const qty = (qty_type === 'per_sqft') ? 'per_sqft' : 'per_unit';
     const price = parseFloat(unit_price) || 0;
+    const audience = normalizePriceAudience(price_audience);
     const result = db.prepare(`
-      INSERT INTO service_items (name, item_type, qty_type, unit_price)
-      VALUES (?, ?, ?, ?)
-    `).run(String(name).trim(), String(item_type || '').trim(), qty, price);
+      INSERT INTO service_items (name, item_type, qty_type, unit_price, price_audience)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(String(name).trim(), String(item_type || '').trim(), qty, price, audience);
     const created = db.prepare('SELECT * FROM service_items WHERE id = ?').get(result.lastInsertRowid);
+    log('price_added', 'price', created.id, {
+      item_name: created.name,
+      new_price: created.unit_price,
+      price_audience: created.price_audience,
+    });
     res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -798,7 +857,7 @@ router.post('/service-items', (req, res) => {
 
 router.put('/service-items/:id', (req, res) => {
   try {
-    const { name, item_type, qty_type, unit_price } = req.body;
+    const { name, item_type, qty_type, unit_price, price_audience } = req.body;
     const id = req.params.id;
     const row = db.prepare('SELECT * FROM service_items WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Service item not found' });
@@ -808,10 +867,17 @@ router.put('/service-items/:id', (req, res) => {
     if (item_type !== undefined) { updates.push('item_type = ?'); params.push(String(item_type || '').trim()); }
     if (qty_type !== undefined) { updates.push('qty_type = ?'); params.push(qty_type === 'per_sqft' ? 'per_sqft' : 'per_unit'); }
     if (unit_price !== undefined) { updates.push('unit_price = ?'); params.push(parseFloat(unit_price) || 0); }
+    if (price_audience !== undefined) { updates.push('price_audience = ?'); params.push(normalizePriceAudience(price_audience)); }
     if (updates.length === 0) return res.status(400).json({ error: 'No updates provided' });
     params.push(id);
     db.prepare(`UPDATE service_items SET ${updates.join(', ')} WHERE id = ?`).run(...params);
     const updated = db.prepare('SELECT * FROM service_items WHERE id = ?').get(id);
+    log('price_changed', 'price', updated.id, {
+      item_name: updated.name,
+      old_price: row.unit_price,
+      new_price: updated.unit_price,
+      price_audience: updated.price_audience,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -823,6 +889,11 @@ router.delete('/service-items/:id', (req, res) => {
     const row = db.prepare('SELECT * FROM service_items WHERE id = ?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Service item not found' });
     db.prepare('DELETE FROM service_items WHERE id = ?').run(req.params.id);
+    log('price_removed', 'price', row.id, {
+      item_name: row.name,
+      old_price: row.unit_price,
+      price_audience: row.price_audience,
+    });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -841,7 +912,10 @@ router.get('/design-banner-sizes', (req, res) => {
 
 router.delete('/design-banner-sizes/:id', (req, res) => {
   try {
-    db.prepare('DELETE FROM design_for_banner_sizes WHERE id = ?').run(req.params.id);
+    const row = db.prepare('SELECT * FROM design_for_banner_sizes WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Design banner size not found' });
+    db.prepare('DELETE FROM design_for_banner_sizes WHERE id = ?').run(row.id);
+    log('price_removed', 'price', row.id, { item_name: row.size_name, size_name: row.size_name, old_price: row.unit_price, price_audience: row.price_audience });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -850,7 +924,7 @@ router.delete('/design-banner-sizes/:id', (req, res) => {
 
 router.put('/design-banner-sizes/:id', (req, res) => {
   try {
-    const { unit_price, size_name } = req.body;
+    const { unit_price, size_name, price_audience } = req.body;
     const id = req.params.id;
     const row = db.prepare('SELECT * FROM design_for_banner_sizes WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Design banner size not found' });
@@ -864,10 +938,21 @@ router.put('/design-banner-sizes/:id', (req, res) => {
       updates.push('size_name = ?');
       params.push(String(size_name).trim());
     }
+    if (price_audience !== undefined) {
+      updates.push('price_audience = ?');
+      params.push(normalizePriceAudience(price_audience));
+    }
     if (updates.length === 0) return res.status(400).json({ error: 'No updates provided' });
     params.push(id);
     db.prepare(`UPDATE design_for_banner_sizes SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...params);
     const updated = db.prepare('SELECT * FROM design_for_banner_sizes WHERE id = ?').get(id);
+    log('price_changed', 'price', updated.id, {
+      item_name: updated.size_name,
+      size_name: updated.size_name,
+      old_price: row.unit_price,
+      new_price: updated.unit_price,
+      price_audience: updated.price_audience,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -886,7 +971,10 @@ router.get('/design-photo-sizes', (req, res) => {
 
 router.delete('/design-photo-sizes/:id', (req, res) => {
   try {
-    db.prepare('DELETE FROM design_for_photo_sizes WHERE id = ?').run(req.params.id);
+    const row = db.prepare('SELECT * FROM design_for_photo_sizes WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Design photo size not found' });
+    db.prepare('DELETE FROM design_for_photo_sizes WHERE id = ?').run(row.id);
+    log('price_removed', 'price', row.id, { item_name: row.size_name, size_name: row.size_name, old_price: row.unit_price, price_audience: row.price_audience });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -895,7 +983,7 @@ router.delete('/design-photo-sizes/:id', (req, res) => {
 
 router.put('/design-photo-sizes/:id', (req, res) => {
   try {
-    const { unit_price, size_name } = req.body;
+    const { unit_price, size_name, price_audience } = req.body;
     const id = req.params.id;
     const row = db.prepare('SELECT * FROM design_for_photo_sizes WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Design photo size not found' });
@@ -909,10 +997,21 @@ router.put('/design-photo-sizes/:id', (req, res) => {
       updates.push('size_name = ?');
       params.push(String(size_name).trim());
     }
+    if (price_audience !== undefined) {
+      updates.push('price_audience = ?');
+      params.push(normalizePriceAudience(price_audience));
+    }
     if (updates.length === 0) return res.status(400).json({ error: 'No updates provided' });
     params.push(id);
     db.prepare(`UPDATE design_for_photo_sizes SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...params);
     const updated = db.prepare('SELECT * FROM design_for_photo_sizes WHERE id = ?').get(id);
+    log('price_changed', 'price', updated.id, {
+      item_name: updated.size_name,
+      size_name: updated.size_name,
+      old_price: row.unit_price,
+      new_price: updated.unit_price,
+      price_audience: updated.price_audience,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });

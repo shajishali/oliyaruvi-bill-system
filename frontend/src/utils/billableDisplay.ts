@@ -13,6 +13,7 @@ export function billableRowKey(i: BillableItem): string {
     i.printTypeLabel ?? '',
     i.calcType ?? '',
     (i as { frameGroupKey?: string }).frameGroupKey ?? '',
+    i.priceAudience ?? '',
     i.itemLabel ?? '',
     (i as { sectionId?: string }).sectionId ?? '',
     (i as { serviceItemId?: number }).serviceItemId ?? '',
@@ -74,14 +75,13 @@ export function sameProductGroupForSizePicker(selected: BillableItem, row: Billa
   if (selected.type !== row.type) return false;
   switch (row.type) {
     case 'banner_roll':
-      // Same Settings material + pricing mode; sizes come from all banner_stock rows for that material.
       return (
-        selected.materialId === row.materialId &&
+        String(selected.materialName || selected.itemLabel || '') === String(row.materialName || row.itemLabel || '') &&
         String(selected.calcType || '') === String(row.calcType || '')
       );
     case 'sticker_roll':
       return (
-        selected.materialId === row.materialId &&
+        String(selected.materialName || '') === String(row.materialName || '') &&
         String(selected.stockTypeLabel || '') === String(row.stockTypeLabel || '')
       );
     case 'banner':
@@ -89,10 +89,7 @@ export function sameProductGroupForSizePicker(selected: BillableItem, row: Billa
     case 'service':
       return selected.name === row.name && selected.materialId === row.materialId;
     case 'service_item':
-      return (
-        (selected as { serviceItemId?: number }).serviceItemId ===
-        (row as { serviceItemId?: number }).serviceItemId
-      );
+      return selected.name === row.name && String(selected.groupLabel || '') === String(row.groupLabel || '');
     case 'frame':
       return (
         String((selected as { frameGroupKey?: string }).frameGroupKey || '') ===

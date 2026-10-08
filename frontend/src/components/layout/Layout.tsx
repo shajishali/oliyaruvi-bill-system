@@ -1,6 +1,7 @@
 import Sidebar from './Sidebar';
 import NotificationToast from './NotificationToast';
 import PageTransition from './PageTransition';
+import { AdminPermissionHost } from '../admin/AdminPermission';
 
 export default function Layout() {
   return (
@@ -10,6 +11,7 @@ export default function Layout() {
         <PageTransition />
       </main>
       <NotificationToast />
+      <AdminPermissionHost />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { isValidEmail } from '../contexts/AuthContext';
-import { FORGOT_PASSWORD_EMAIL, ADMIN_PASSWORD_KEY } from '../constants/adminAuth';
+import { FORGOT_PASSWORD_EMAIL, setAdminPassword } from '../constants/adminAuth';
 import { api } from '../api/client';
 
 export default function Forgot() {
@@ -9,6 +9,8 @@ export default function Forgot() {
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [done, setDone] = useState(false);
   const [error, setError] = useState('');
   const [sendingOtp, setSendingOtp] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
@@ -57,11 +59,12 @@ export default function Forgot() {
       setError('Password must be at least 4 characters');
       return;
     }
-    localStorage.setItem(ADMIN_PASSWORD_KEY, newPassword);
-    setStep('email');
-    setEmail('');
-    setOtp('');
-    setNewPassword('');
+    if (newPassword !== confirmPassword) {
+      setError('Password and confirmation do not match');
+      return;
+    }
+    setAdminPassword(newPassword);
+    setDone(true);
   };
 
   return (
@@ -70,11 +73,11 @@ export default function Forgot() {
 
       {step === 'email' && (
         <>
-          <p className="text-red-200/80 text-sm mb-4">Enter your owner email to receive OTP and reset the admin password.</p>
+          <p className="text-red-100 text-sm mb-4">Enter the owner email to receive an OTP and set a new admin password.</p>
           {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
           <form onSubmit={handleEmailSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-red-200/90 mb-1">Email</label>
+              <label className="block text-sm font-medium text-white mb-1">Email</label>
               <input
                 type="email"
                 value={email}
@@ -103,7 +106,7 @@ export default function Forgot() {
           {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
           <form onSubmit={handleOtpSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-red-200/90 mb-1">Enter OTP</label>
+              <label className="block text-sm font-medium text-white mb-1">Enter OTP</label>
               <input
                 type="text"
                 value={otp}
@@ -123,30 +126,47 @@ export default function Forgot() {
 
       {step === 'password' && (
         <>
-          {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
-          <form onSubmit={handlePasswordSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-red-200/90 mb-1">New Password</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-                placeholder="Enter new password"
-                minLength={4}
-                required
-              />
-            </div>
-            <button type="submit" className="w-full py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700">
-              Reset Password
-            </button>
-          </form>
-          <p className="mt-4 text-sm text-emerald-300/90">Password reset. Use admin / new password to access Settings.</p>
+          {done ? (
+            <p className="text-sm text-emerald-200">Admin password saved. Use it the next time you open Salary or Settings.</p>
+          ) : (
+            <>
+              {error && <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg text-sm">{error}</div>}
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">New Password</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300"
+                    placeholder="Enter new password"
+                    minLength={4}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">Confirm Password</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-300"
+                    placeholder="Confirm new password"
+                    minLength={4}
+                    required
+                  />
+                </div>
+                <button type="submit" className="w-full py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700">
+                  Reset Password
+                </button>
+              </form>
+            </>
+          )}
         </>
       )}
 
-      <p className="mt-4 text-center text-red-200/80 text-sm">
-        <Link to="/login" className="text-red-400 hover:text-red-300 font-medium">
+      <p className="mt-4 text-center text-red-100 text-sm">
+        <Link to="/" className="text-red-200 hover:text-white font-medium">
           Back to Login
         </Link>
       </p>

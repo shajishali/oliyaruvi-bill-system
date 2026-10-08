@@ -6,7 +6,7 @@ export default function Register() {
   const { isAuthenticated } = useAuth();
   if (isAuthenticated) return <Navigate to="/app" replace />;
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
@@ -22,7 +22,7 @@ export default function Register() {
       return;
     }
     setSubmitting(true);
-    const result = register(name, email, password);
+    const result = register(name, username, password);
     if (result.success) {
       navigate('/app');
     } else {
@@ -48,13 +48,14 @@ export default function Register() {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-red-200/90 mb-1">Email</label>
+          <label className="block text-sm font-medium text-red-200/90 mb-1">Username</label>
           <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
             className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-            placeholder="e.g. name@example.com"
+            placeholder="e.g. shaji"
+            autoComplete="username"
             required
           />
         </div>

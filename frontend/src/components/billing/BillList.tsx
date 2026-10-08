@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { api } from '../../api/client';
 import type { Bill } from '../../types';
 import PayBalanceModal from './PayBalanceModal';
+import { requestAdminPermission } from '../admin/AdminPermission';
 
 interface BillListProps {
   onPrint: (bill: Bill) => void;
   onEdit?: (bill: Bill) => void;
   onBillUpdated?: () => void;
+  updatedBill?: Bill | null;
 }
 
 interface SearchState {
@@ -18,6 +20,44 @@ interface SearchState {
   pending_settlement: string;
 }
 
+function amountDue(bill: Bill) {
+  return (parseFloat(String(bill.total)) || 0) - (bill.amount_paid ?? 0);
+}
+
+function dueFirst(rows: Bill[]) {
+  return [...rows].sort((a, b) => {
+    const aDue = amountDue(a) > 0.009 ? 0 : 1;
+    const bDue = amountDue(b) > 0.009 ? 0 : 1;
+    return aDue - bDue;
+  }).slice(0, 8);
+}
+
+function BillMatchList({ bills, onPick, phoneFirst = false }: { bills: Bill[]; onPick: (bill: Bill) => void; phoneFirst?: boolean }) {
+  return (
+    <ul className="absolute top-full left-0 z-30 mt-1 w-72 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-52 overflow-auto">
+      {bills.map((bill) => {
+        const due = amountDue(bill);
+        return (
+          <li key={bill.id}>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onPick(bill)}
+              className="w-full text-left px-3 py-2 hover:bg-red-950/50"
+            >
+              <span className="text-sm text-white font-medium">{phoneFirst ? (bill.customer_phone || 'No phone') : bill.customer_name}</span>
+              <span className="ml-2 text-sm text-red-300/75">{phoneFirst ? bill.customer_name : bill.customer_phone}</span>
+              <span className="block text-xs text-red-200/70">
+                {bill.bill_number} · {bill.bill_date} · {due > 0.009 ? `Due Rs.${due.toFixed(2)}` : 'Paid'}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function getPaymentStatus(b: Bill): 'paid' | 'partial' | 'pending' {
   const paid = b.amount_paid ?? 0;
   const total = parseFloat(String(b.total)) || 0;
@@ -26,7 +66,7 @@ function getPaymentStatus(b: Bill): 'paid' | 'partial' | 'pending' {
   return 'pending';
 }
 
-export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListProps) {
+export default function BillList({ onPrint, onEdit, onBillUpdated, updatedBill }: BillListProps) {
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -37,6 +77,10 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
   const [markingAllPaid, setMarkingAllPaid] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState<SearchState>({ number: '', customer: '', phone: '', from: '', to: '', pending_settlement: '' });
+  const [nameHits, setNameHits] = useState<Bill[]>([]);
+  const [phoneHits, setPhoneHits] = useState<Bill[]>([]);
+  const [nameMenuOpen, setNameMenuOpen] = useState(false);
+  const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
 
   const fetchBills = () => {
     setLoading(true);
@@ -56,6 +100,35 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
   useEffect(() => {
     fetchBills();
   }, []);
+
+  useEffect(() => {
+    if (!updatedBill) return;
+    setBills((prev) => prev.map((b) => (b.id === updatedBill.id ? { ...b, ...updatedBill } : b)));
+  }, [updatedBill]);
+
+  useEffect(() => {
+    const q = search.customer.trim();
+    if (q.length < 1) {
+      setNameHits([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      api.bills.list({ customer: q }).then((rows) => setNameHits(dueFirst(rows))).catch(() => setNameHits([]));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search.customer]);
+
+  useEffect(() => {
+    const q = search.phone.trim();
+    if (q.length < 1) {
+      setPhoneHits([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      api.bills.list({ phone: q }).then((rows) => setPhoneHits(dueFirst(rows))).catch(() => setPhoneHits([]));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search.phone]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,6 +216,7 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
   };
 
   const deleteBill = async (bill: Bill) => {
+    if (!(await requestAdminPermission())) return;
     if (!window.confirm(`Delete ${bill.bill_number}? This will rollback stock and payments.`)) return;
     setDeletingIds((prev) => new Set(prev).add(bill.id));
     try {
@@ -162,7 +236,9 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
 
   return (
     <div className="bg-black/90 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 p-6">
-      <form onSubmit={handleSearch} className="flex flex-wrap gap-4 mb-6 items-center">
+      <p className="text-sm text-red-300/75 mb-1">Deleting a bill needs admin permission.</p>
+      <p className="text-sm text-red-300/75 mb-4">Type a name or mobile number and click the matching bill to open it and take the balance.</p>
+      <form onSubmit={handleSearch} className={`flex flex-wrap gap-4 mb-6 items-center ${nameMenuOpen || phoneMenuOpen ? 'relative z-30' : ''}`}>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -179,21 +255,41 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
           onChange={(e) => setSearch((s) => ({ ...s, number: e.target.value }))}
           className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
         />
-        <input
-          type="text"
-          placeholder="Customer name"
-          value={search.customer}
-          onChange={(e) => setSearch((s) => ({ ...s, customer: e.target.value }))}
-          className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-        />
-        <input
-          type="tel"
-          inputMode="tel"
-          placeholder="Mobile number"
-          value={search.phone}
-          onChange={(e) => setSearch((s) => ({ ...s, phone: e.target.value.replace(/[^0-9+ -]/g, '') }))}
-          className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-        />
+        <div className={nameMenuOpen && nameHits.length > 0 ? 'relative z-30' : 'relative'}>
+          <input
+            type="text"
+            placeholder="Customer name"
+            value={search.customer}
+            onFocus={() => setNameMenuOpen(true)}
+            onBlur={() => setTimeout(() => setNameMenuOpen(false), 150)}
+            onChange={(e) => {
+              setSearch((s) => ({ ...s, customer: e.target.value }));
+              setNameMenuOpen(true);
+            }}
+            className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+          />
+          {nameMenuOpen && nameHits.length > 0 && (
+            <BillMatchList bills={nameHits} onPick={(bill) => { setNameMenuOpen(false); viewBill(bill.id); }} />
+          )}
+        </div>
+        <div className={phoneMenuOpen && phoneHits.length > 0 ? 'relative z-30' : 'relative'}>
+          <input
+            type="tel"
+            inputMode="tel"
+            placeholder="Mobile number"
+            value={search.phone}
+            onFocus={() => setPhoneMenuOpen(true)}
+            onBlur={() => setTimeout(() => setPhoneMenuOpen(false), 150)}
+            onChange={(e) => {
+              setSearch((s) => ({ ...s, phone: e.target.value.replace(/[^0-9+ -]/g, '') }));
+              setPhoneMenuOpen(true);
+            }}
+            className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+          />
+          {phoneMenuOpen && phoneHits.length > 0 && (
+            <BillMatchList bills={phoneHits} phoneFirst onPick={(bill) => { setPhoneMenuOpen(false); viewBill(bill.id); }} />
+          )}
+        </div>
         <input
           type="date"
           placeholder="From"
@@ -232,6 +328,7 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
               <th className="text-left p-2 border border-red-950/50 text-red-200">Bill #</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">Date</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">Customer</th>
+              <th className="text-left p-2 border border-red-950/50 text-red-200">Counter</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">Mobile</th>
               <th className="text-right p-2 border border-red-950/50 text-red-200">Total</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">
@@ -252,13 +349,22 @@ export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListPro
               <tr key={b.id} className={`hover:bg-red-950/30 border-b border-red-950/40 ${status === 'partial' ? 'bg-amber-950/20' : ''}`}>
                 <td className="p-2 border border-red-950/40 text-white">{b.bill_number}</td>
                 <td className="p-2 border border-red-950/40 text-red-200/90">{b.bill_date}</td>
-                <td className="p-2 border border-red-950/40 text-white">{b.customer_name}</td>
-                <td className="p-2 border border-red-950/40 text-red-200/90">{b.customer_phone || '-'}</td>
+                <td className="p-2 border border-red-950/40">
+                  <button type="button" onClick={() => viewBill(b.id)} className="text-white hover:underline text-left">{b.customer_name}</button>
+                </td>
+                <td className="p-2 border border-red-950/40 text-red-200/90">{b.counter_staff_name || '—'}</td>
+                <td className="p-2 border border-red-950/40">
+                  {b.customer_phone ? (
+                    <button type="button" onClick={() => viewBill(b.id)} className="text-red-200/90 hover:underline text-left">{b.customer_phone}</button>
+                  ) : (
+                    <span className="text-red-200/90">-</span>
+                  )}
+                </td>
                 <td className="p-2 border border-red-950/40 text-right text-white">Rs.{total.toFixed(2)}</td>
                 <td className="p-2 border border-red-950/40">
                   {status === 'paid' && <span className="text-emerald-400 text-sm">Paid</span>}
                   {status === 'partial' && <span className="text-red-300/80 text-sm" title={`Advance: Rs.${paid.toFixed(2)} | Balance: Rs.${balance.toFixed(2)}`}>Pending – Rs.{balance.toFixed(2)} due</span>}
-                  {status === 'pending' && <span className="text-red-300/80 text-sm">Pending</span>}
+                  {status === 'pending' && <span className="text-red-300/80 text-sm" title={`Balance: Rs.${balance.toFixed(2)}`}>Pending – Rs.{balance.toFixed(2)} due</span>}
                 </td>
                 <td className="p-2 border border-red-950/40 text-red-200/90">{b.payment_method}</td>
                 <td className="p-2 border border-red-950/40 text-center">

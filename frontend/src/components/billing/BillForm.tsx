@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom';
 import { api } from '../../api/client';
 import type { Bill, BillItem, BillableItem, Customer } from '../../types';
 import { formatSizeDisplay, parseSizeDimensions } from '../../utils/sizeFormat';
-import { dedupeBillableItems, sameProductGroupForSizePicker } from '../../utils/billableDisplay';
+import { billableRowKey, dedupeBillableItems, sameProductGroupForSizePicker } from '../../utils/billableDisplay';
 import { buildBillingPlaceholderOptions } from '../../constants/billingItemPlaceholderAllowlist';
 
 interface BillFormProps {
   onBillCreated: (bill: Bill) => void;
+  onSaved?: () => void;
+  counterPerson?: string | null;
   editingBill?: Bill | null;
   onEditSaved?: (bill: Bill) => void;
   onCancelEdit?: () => void;
@@ -20,6 +22,98 @@ type BillFormLineItem = BillItem & {
   photocopy_id?: number;
   metadata?: Record<string, unknown>;
 };
+
+const BILL_DRAFT_KEY = 'oliyaruvi_bill_draft';
+
+function foldRepeats(value: string): string {
+  return value.toLowerCase().replace(/(.)\1+/g, '$1');
+}
+
+function customerMatches(customer: Customer, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const name = (customer.name || '').toLowerCase();
+  const phone = (customer.phone || '').toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  const phoneDigits = phone.replace(/\D/g, '');
+  if (name.includes(q) || phone.includes(q)) return true;
+  if (digits && phoneDigits.includes(digits)) return true;
+  const foldedQuery = foldRepeats(q);
+  if (foldedQuery.length >= 2 && foldRepeats(name).includes(foldedQuery)) return true;
+  return false;
+}
+
+function customerMatchRank(customer: Customer, query: string, field: 'name' | 'phone'): number {
+  const q = query.trim().toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  const name = (customer.name || '').trim().toLowerCase();
+  const foldedName = foldRepeats(name);
+  const foldedQuery = foldRepeats(q);
+  const phoneDigits = (customer.phone || '').replace(/\D/g, '');
+  if (field === 'phone') {
+    if (digits && phoneDigits.startsWith(digits)) return 0;
+    if (digits && phoneDigits.includes(digits)) return 1;
+    if (q && (name.startsWith(q) || foldedName.startsWith(foldedQuery))) return 2;
+    if (q && (name.includes(q) || foldedName.includes(foldedQuery))) return 3;
+    return 4;
+  }
+  if (q && (name.startsWith(q) || foldedName.startsWith(foldedQuery))) return 0;
+  if (q && (name.includes(q) || foldedName.includes(foldedQuery))) return 1;
+  if (digits && phoneDigits.startsWith(digits)) return 2;
+  if (digits && phoneDigits.includes(digits)) return 3;
+  return 4;
+}
+
+function orderedCustomers(list: Customer[], query: string, field: 'name' | 'phone'): Customer[] {
+  return list
+    .filter((customer) => customerMatches(customer, query))
+    .sort((a, b) => {
+      const rank = customerMatchRank(a, query, field) - customerMatchRank(b, query, field);
+      if (rank !== 0) return rank;
+      if (field === 'phone') {
+        return (a.phone || '').localeCompare(b.phone || '', undefined, { numeric: true }) || a.name.localeCompare(b.name);
+      }
+      return a.name.localeCompare(b.name) || (a.phone || '').localeCompare(b.phone || '', undefined, { numeric: true });
+    });
+}
+
+type BillDraft = {
+  customerName: string;
+  customerPhone: string;
+  selectedCustomer: Customer | null;
+  notes: string;
+  paymentMethod: string;
+  advanceStr: string;
+  items: BillFormLineItem[];
+  itemSearch: string;
+  manualSizeInput: string;
+  quantity: string;
+  unitPriceStr: string;
+  itemDiscountStr: string;
+  manualPricingUnit: 'per_sqft' | 'per_unit';
+  sizeWidthStr: string;
+  sizeLengthStr: string;
+  selectedItemKey: string | null;
+  selectedSizeKey: string | null;
+};
+
+function readBillDraft(): BillDraft | null {
+  try {
+    const raw = sessionStorage.getItem(BILL_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as BillDraft;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function priceAudienceLabel(item: { priceAudience?: string } | null | undefined): string {
+  if (item?.priceAudience === 'st') return 'ST';
+  if (item?.priceAudience === 'local') return 'Local';
+  return '';
+}
 
 const parseBillItemMetadata = (metadata: BillItem['metadata']): Record<string, unknown> => {
   if (!metadata) return {};
@@ -81,20 +175,26 @@ function EditNumberInput({ value, min = 0, step = 1, widthClass, onValueChange }
   );
 }
 
-export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCancelEdit }: BillFormProps) {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [customerSearch, setCustomerSearch] = useState('');
+export default function BillForm({ onBillCreated, onSaved, counterPerson = null, editingBill, onEditSaved, onCancelEdit }: BillFormProps) {
+  const initialDraft = editingBill ? null : readBillDraft();
+  const pendingItemKey = useRef<string | null>(initialDraft?.selectedItemKey ?? null);
+  const pendingSizeKey = useRef<string | null>(initialDraft?.selectedSizeKey ?? null);
+  const restoredPick = useRef(false);
+  const [customerDirectory, setCustomerDirectory] = useState<Customer[]>([]);
+  const [customerMenuOpen, setCustomerMenuOpen] = useState(false);
+  const [customerNotice, setCustomerNotice] = useState('');
+  const [hideCustomerPlaceholders, setHideCustomerPlaceholders] = useState(false);
   const [activeCustomerSearchField, setActiveCustomerSearchField] = useState<'name' | 'phone'>('name');
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(initialDraft?.selectedCustomer ?? null);
+  const [customerName, setCustomerName] = useState(initialDraft?.customerName || '');
+  const [customerPhone, setCustomerPhone] = useState(initialDraft?.customerPhone || '');
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
-  const [items, setItems] = useState<BillFormLineItem[]>([]);
-  const [advanceStr, setAdvanceStr] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
-  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState<BillFormLineItem[]>(initialDraft?.items || []);
+  const [advanceStr, setAdvanceStr] = useState(initialDraft?.advanceStr || '');
+  const [paymentMethod, setPaymentMethod] = useState(initialDraft?.paymentMethod || 'Cash');
+  const [notes, setNotes] = useState(initialDraft?.notes || '');
   const [loading, setLoading] = useState(false);
   const [quickAddLoading, setQuickAddLoading] = useState(false);
   const [error, setError] = useState('');
@@ -102,20 +202,20 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
   const [billableItems, setBillableItems] = useState<BillableItem[]>([]);
   const [billableItemsLoading, setBillableItemsLoading] = useState(true);
   const [billableItemsError, setBillableItemsError] = useState<string | null>(null);
-  const [itemSearch, setItemSearch] = useState('');
+  const [itemSearch, setItemSearch] = useState(initialDraft?.itemSearch || '');
   const [selectedItem, setSelectedItem] = useState<BillableItem | null>(null);
   const [selectedSize, setSelectedSize] = useState<BillableItem | null>(null);
-  const [quantity, setQuantity] = useState('');
-  const [unitPriceStr, setUnitPriceStr] = useState('');
-  const [itemDiscountStr, setItemDiscountStr] = useState('');
+  const [quantity, setQuantity] = useState(initialDraft?.quantity || '');
+  const [unitPriceStr, setUnitPriceStr] = useState(initialDraft?.unitPriceStr || '');
+  const [itemDiscountStr, setItemDiscountStr] = useState(initialDraft?.itemDiscountStr || '');
   const [itemDropdownOpen, setItemDropdownOpen] = useState(false);
   const [sizeDropdownOpen, setSizeDropdownOpen] = useState(false);
-  const [sizeWidthStr, setSizeWidthStr] = useState('');
-  const [sizeLengthStr, setSizeLengthStr] = useState('');
+  const [sizeWidthStr, setSizeWidthStr] = useState(initialDraft?.sizeWidthStr || '');
+  const [sizeLengthStr, setSizeLengthStr] = useState(initialDraft?.sizeLengthStr || '');
   /** Free-text size when not using roll dimensions, or override label after picking from list */
-  const [manualSizeInput, setManualSizeInput] = useState('');
+  const [manualSizeInput, setManualSizeInput] = useState(initialDraft?.manualSizeInput || '');
   /** Manual lines only: whether unit price is per sqft or per piece */
-  const [manualPricingUnit, setManualPricingUnit] = useState<'per_sqft' | 'per_unit'>('per_unit');
+  const [manualPricingUnit, setManualPricingUnit] = useState<'per_sqft' | 'per_unit'>(initialDraft?.manualPricingUnit || 'per_unit');
   /** Stock row `stock_type` (banner/sticker tabs) — filters roll widths in Size */
   const [selectedStockTypeKey, setSelectedStockTypeKey] = useState('');
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
@@ -163,13 +263,16 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
   }, []);
 
   useEffect(() => {
-    const q = customerSearch.trim();
-    if (q.length < 2) {
-      setCustomers([]);
-      return;
-    }
-    api.customers.search(q).then(setCustomers);
-  }, [customerSearch]);
+    let cancelled = false;
+    api.customers.list().then((rows) => {
+      if (!cancelled) setCustomerDirectory(rows);
+    }).catch(() => {
+      if (!cancelled) setCustomerDirectory([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const closeDropdowns = (e: MouseEvent) => {
@@ -209,8 +312,7 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     setError('');
     setCustomerName(editingBill.customer_name || '');
     setCustomerPhone(editingBill.customer_phone || '');
-    setCustomerSearch('');
-    setCustomers([]);
+    setCustomerMenuOpen(false);
     setSelectedCustomer(
       editingBill.customer_id
         ? {
@@ -341,6 +443,48 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     return Math.max(0, round2(base - pending));
   };
 
+  const pieceSizeKey = (value: string | undefined) => {
+    const m = String(value || '').match(/(\d+(?:\.\d+)?)\s*[xX×+]\s*(\d+(?:\.\d+)?)/);
+    if (m) return `${parseFloat(m[1])}x${parseFloat(m[2])}`;
+    return String(value || '').toLowerCase().replace(/\(in\)/gi, '').replace(/\s+/g, '').trim();
+  };
+
+  /** Pieces already on this unfinished bill for the same stock row. Shop stock is unchanged until Save Bill. */
+  const pendingPieceQty = (row: BillableItem) => {
+    if (row.stockQty === undefined) return 0;
+    if (row.type === 'banner_roll' || row.type === 'sticker_roll') return 0;
+    return items.reduce((sum, line) => {
+      const qty = parseFloat(String(line.quantity)) || 0;
+      if (qty <= 0 || line.service_type !== row.type) return sum;
+      const meta = (line.metadata || {}) as { frame_id?: number; photo_id?: number; photocopy_id?: number; custom_item_id?: number };
+      if (row.type === 'frame') {
+        const lineFrame = line.frame_id ?? meta.frame_id;
+        if (row.frameId && lineFrame) return lineFrame === row.frameId ? sum + qty : sum;
+        const rowSize = pieceSizeKey(row.sizeName);
+        const lineSize = pieceSizeKey(line.size);
+        return rowSize && lineSize === rowSize ? sum + qty : sum;
+      }
+      if (row.type === 'photo') {
+        const id = line.photo_id ?? meta.photo_id;
+        return id && id === row.sizeId ? sum + qty : sum;
+      }
+      if (row.type === 'photocopy') {
+        const id = line.photocopy_id ?? meta.photocopy_id;
+        return id && id === row.sizeId ? sum + qty : sum;
+      }
+      if (row.type === 'custom' && row.customItemId) {
+        return meta.custom_item_id === row.customItemId ? sum + qty : sum;
+      }
+      return sum;
+    }, 0);
+  };
+
+  const remainingPieceStock = (row: BillableItem | null | undefined) => {
+    if (!row || row.stockQty === undefined) return undefined;
+    if (row.type === 'banner_roll' || row.type === 'sticker_roll') return undefined;
+    return Math.max(0, row.stockQty - pendingPieceQty(row));
+  };
+
   const groupRowsForItem = useMemo(() => {
     if (!selectedItem) return [];
     return billableItems.filter((i) => sameProductGroupForSizePicker(selectedItem, i));
@@ -410,6 +554,81 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
       setQuantity('');
     }
   }
+
+  useEffect(() => {
+    if (editingBill || restoredPick.current || billableItems.length === 0) return;
+    restoredPick.current = true;
+    const item = pendingItemKey.current
+      ? billableItems.find((row) => billableRowKey(row) === pendingItemKey.current) || null
+      : null;
+    const size = pendingSizeKey.current
+      ? billableItems.find((row) => billableRowKey(row) === pendingSizeKey.current) || null
+      : null;
+    pendingItemKey.current = null;
+    pendingSizeKey.current = null;
+    if (item) setSelectedItem(item);
+    if (size) applyRollSizePick(size);
+    if (quantity) setQuantity(quantity);
+    if (unitPriceStr) setUnitPriceStr(unitPriceStr);
+  }, [billableItems, editingBill]);
+
+  useEffect(() => {
+    if (editingBill || savedBill) return;
+    const draft: BillDraft = {
+      customerName,
+      customerPhone,
+      selectedCustomer,
+      notes,
+      paymentMethod,
+      advanceStr,
+      items,
+      itemSearch,
+      manualSizeInput,
+      quantity,
+      unitPriceStr,
+      itemDiscountStr,
+      manualPricingUnit,
+      sizeWidthStr,
+      sizeLengthStr,
+      selectedItemKey: selectedItem ? billableRowKey(selectedItem) : pendingItemKey.current,
+      selectedSizeKey: selectedSize ? billableRowKey(selectedSize) : pendingSizeKey.current,
+    };
+    const hasWork = Boolean(
+      draft.customerName.trim() ||
+      draft.customerPhone.trim() ||
+      draft.notes.trim() ||
+      draft.items.length ||
+      draft.itemSearch.trim() ||
+      draft.manualSizeInput.trim() ||
+      draft.quantity.trim() ||
+      draft.advanceStr.trim()
+    );
+    if (!hasWork) {
+      sessionStorage.removeItem(BILL_DRAFT_KEY);
+      return;
+    }
+    sessionStorage.setItem(BILL_DRAFT_KEY, JSON.stringify(draft));
+  }, [
+    editingBill,
+    savedBill,
+    customerName,
+    customerPhone,
+    selectedCustomer,
+    notes,
+    paymentMethod,
+    advanceStr,
+    items,
+    itemSearch,
+    manualSizeInput,
+    quantity,
+    unitPriceStr,
+    itemDiscountStr,
+    manualPricingUnit,
+    sizeWidthStr,
+    sizeLengthStr,
+    selectedItem,
+    selectedSize,
+  ]);
 
   const getDefaultUnitPrice = () => {
     if (!selectedSize) return 0;
@@ -485,6 +704,11 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
       setError(`Only ${remainingSqft} sqft available for this stock row`);
       return;
     }
+    const piecesLeft = remainingPieceStock(selectedSize);
+    if (piecesLeft !== undefined && qty > piecesLeft) {
+      setError(piecesLeft <= 0 ? 'No stock left for this item on this bill.' : `Only ${piecesLeft} left in stock for this item.`);
+      return;
+    }
 
     const sizeDisplay = formatSizeDisplay(selectedSize.sizeName) || selectedSize.sizeName;
     const labelFromApi = selectedSize.itemLabel?.trim();
@@ -522,7 +746,17 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     const widthFt = selectedSize.widthFt;
 
     const editedWidth = parseFloat(sizeWidthStr) || widthFt;
-    let metadata: { banner_stock_id?: number; sticker_stock_id?: number; width_ft?: number; custom_item_id?: number } | undefined;
+    let metadata: {
+      banner_stock_id?: number;
+      sticker_stock_id?: number;
+      width_ft?: number;
+      custom_item_id?: number;
+      frame_id?: number;
+      photo_id?: number;
+      photocopy_id?: number;
+      pricing_unit?: 'per_qty';
+      stock_type_label?: string;
+    } | undefined;
     if (selectedItem.type === 'banner_roll' && bannerStockId) {
       metadata = {
         banner_stock_id: bannerStockId,
@@ -554,6 +788,15 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
       if (selectedItem.calcType === 'sqft_direct') {
         metadata.width_ft = parseFloat(sizeWidthStr) || selectedSize.widthFt || 6;
       }
+    }
+    if (selectedItem.type === 'frame' && selectedSize.frameId) {
+      metadata = { ...metadata, frame_id: selectedSize.frameId };
+    }
+    if (selectedItem.type === 'photo' && selectedSize.sizeId) {
+      metadata = { ...metadata, photo_id: selectedSize.sizeId };
+    }
+    if (selectedItem.type === 'photocopy' && selectedSize.sizeId) {
+      metadata = { ...metadata, photocopy_id: selectedSize.sizeId };
     }
 
     const newItem: BillFormLineItem = {
@@ -621,9 +864,13 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     setSelectedCustomer(customer);
     setCustomerName(customer.name);
     setCustomerPhone(customer.phone || '');
-    setCustomerSearch('');
-    setCustomers([]);
+    setCustomerMenuOpen(false);
   };
+
+  const nameSuggestions = orderedCustomers(customerDirectory, customerName, 'name');
+  const phoneSuggestions = orderedCustomers(customerDirectory, customerPhone, 'phone');
+  const showNameSuggestions = customerMenuOpen && activeCustomerSearchField === 'name' && nameSuggestions.length > 0;
+  const showPhoneSuggestions = customerMenuOpen && activeCustomerSearchField === 'phone' && phoneSuggestions.length > 0;
 
   const handleSaveCustomer = async () => {
     const name = customerName.trim();
@@ -639,7 +886,15 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
       const c = selectedCustomer
         ? await api.customers.update(selectedCustomer.id, { name, phone: phone || null })
         : await api.customers.create({ name, phone: phone || null });
+      setCustomerDirectory((prev) => {
+        const rest = prev.filter((row) => row.id !== c.id);
+        return [...rest, c].sort((a, b) => a.name.localeCompare(b.name));
+      });
       selectCustomer(c);
+      setCustomerName('');
+      setCustomerPhone('');
+      setHideCustomerPlaceholders(true);
+      setCustomerNotice(selectedCustomer ? 'Successfully updated' : 'Successfully saved');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -652,6 +907,7 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     setQuickAddLoading(true);
     try {
       const c = await api.customers.create({ name: newCustomerName.trim(), phone: newCustomerPhone || null });
+      setCustomerDirectory((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)));
       selectCustomer(c);
       setShowQuickAdd(false);
       setNewCustomerName('');
@@ -665,7 +921,8 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const name = customerName.trim() || selectedCustomer?.name;
+    const keepSavedContact = hideCustomerPlaceholders && !customerName.trim() && !customerPhone.trim() && !!selectedCustomer;
+    const name = keepSavedContact ? selectedCustomer.name : (customerName.trim() || selectedCustomer?.name);
     if (!name) {
       setError('Customer name is required');
       customerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -678,17 +935,22 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
       setTimeout(() => addRowRef.current?.querySelector<HTMLInputElement>('input')?.focus(), 400);
       return;
     }
+    if (!editingBill && !counterPerson) {
+      setError('Choose who is at the counter before saving the bill.');
+      return;
+    }
     setError('');
     setLoading(true);
     try {
       let billCustomer = selectedCustomer;
-      const phone = customerPhone.trim();
+      const phone = keepSavedContact ? (selectedCustomer?.phone || '') : customerPhone.trim();
       if (!billCustomer && phone) {
         billCustomer = await api.customers.create({ name, phone });
         selectCustomer(billCustomer);
       }
       if (
         billCustomer &&
+        !keepSavedContact &&
         (billCustomer.name !== name || (billCustomer.phone || '') !== phone)
       ) {
         billCustomer = await api.customers.update(billCustomer.id, { name, phone: phone || null });
@@ -713,6 +975,8 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
           });
       await fetchBillableItems(false);
       setSavedBillWasEdit(isEditing);
+      onSaved?.();
+      sessionStorage.removeItem(BILL_DRAFT_KEY);
       setSavedBill(bill);
       if (isEditing) onEditSaved?.(bill);
       setItems([]);
@@ -729,8 +993,11 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
     return (
       <div className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl max-w-md mx-auto">
         <p className="text-emerald-400 font-semibold text-lg mb-4">{savedBillWasEdit ? 'Bill updated' : 'Bill saved'}</p>
-        <p className="text-red-200/90 text-sm mb-6">Bill #{savedBill.bill_number} has been {savedBillWasEdit ? 'updated' : 'saved'} successfully.</p>
-        <div className="flex gap-3">
+        <p className="text-red-200/90 text-sm mb-2">Bill #{savedBill.bill_number} has been {savedBillWasEdit ? 'updated' : 'saved'} successfully.</p>
+        {!savedBillWasEdit && savedBill.counter_staff_name && (
+          <p className="text-emerald-400 text-sm">Saved by {savedBill.counter_staff_name} at the counter.</p>
+        )}
+        <div className="flex gap-3 mt-6">
           <button
             type="button"
             onClick={() => {
@@ -773,28 +1040,41 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
         </div>
       )}
 
-      <div ref={customerSectionRef} className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-4 shadow-xl">
+      <div ref={customerSectionRef} className={`bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-4 shadow-xl ${showNameSuggestions || showPhoneSuggestions ? 'relative z-30' : ''}`}>
+        {customerNotice && (
+          <p className="mb-3 text-sm font-medium text-emerald-400">{customerNotice}</p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-          <div>
+          <div className={showNameSuggestions ? 'relative z-30' : 'relative'}>
             <label className="block text-sm font-medium text-red-200/90 mb-1">Customer name</label>
             <div className="relative">
                 <input
                   ref={customerInputRef}
                   type="text"
                   value={customerName}
+                  onFocus={() => {
+                    setActiveCustomerSearchField('name');
+                    setCustomerMenuOpen(true);
+                  }}
                   onChange={(e) => {
                     const value = e.target.value;
                     setCustomerName(value);
+                    setCustomerNotice('');
+                    if (!value.trim()) {
+                      setCustomerPhone('');
+                      setSelectedCustomer(null);
+                      setHideCustomerPlaceholders(false);
+                    }
                     setActiveCustomerSearchField('name');
-                    setCustomerSearch(value);
+                    setCustomerMenuOpen(true);
                   }}
-                  onBlur={() => setTimeout(() => setCustomers([]), 150)}
-                  placeholder="Search or enter name"
+                  onBlur={() => setTimeout(() => setCustomerMenuOpen(false), 150)}
+                  placeholder={hideCustomerPlaceholders ? '' : 'Search or enter name'}
                   className="w-full border border-red-900/50 rounded-lg px-3 py-1.5 text-sm bg-black/60 text-white placeholder-red-400/50"
                 />
-                {customers.length > 0 && !selectedCustomer && activeCustomerSearchField === 'name' && (
-                  <ul className="absolute left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-10">
-                    {customers.map((c) => (
+                {showNameSuggestions && (
+                  <ul className="absolute top-full left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-30">
+                    {nameSuggestions.map((c) => (
                       <li
                         key={c.id}
                         onMouseDown={(e) => e.preventDefault()}
@@ -809,26 +1089,33 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
                 )}
             </div>
           </div>
-          <div>
+          <div className={showPhoneSuggestions ? 'relative z-30' : 'relative'}>
             <label className="block text-sm font-medium text-red-200/90 mb-1">Mobile number</label>
-            <div className="relative flex gap-2 items-center">
+            <div className="flex gap-2 items-center">
+              <div className="relative flex-1">
               <input
                 type="tel"
                 inputMode="tel"
                 value={customerPhone}
+                onFocus={() => {
+                  setActiveCustomerSearchField('phone');
+                  setCustomerMenuOpen(true);
+                }}
                 onChange={(e) => {
                   const value = e.target.value.replace(/[^0-9+ -]/g, '');
                   setCustomerPhone(value);
+                  setCustomerNotice('');
+                  if (!value.trim()) setHideCustomerPlaceholders(false);
                   setActiveCustomerSearchField('phone');
-                  setCustomerSearch(value);
+                  setCustomerMenuOpen(true);
                 }}
-                onBlur={() => setTimeout(() => setCustomers([]), 150)}
-                placeholder="Search or enter mobile"
+                onBlur={() => setTimeout(() => setCustomerMenuOpen(false), 150)}
+                placeholder={hideCustomerPlaceholders ? '' : 'Search or enter mobile'}
                 className="w-full border border-red-900/50 rounded-lg px-3 py-1.5 text-sm bg-black/60 text-white placeholder-red-400/50"
               />
-              {customers.length > 0 && !selectedCustomer && activeCustomerSearchField === 'phone' && (
-                <ul className="absolute left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-10">
-                  {customers.map((c) => (
+              {showPhoneSuggestions && (
+                <ul className="absolute top-full left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-30">
+                  {phoneSuggestions.map((c) => (
                     <li
                       key={c.id}
                       onMouseDown={(e) => e.preventDefault()}
@@ -841,13 +1128,14 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
                   ))}
                 </ul>
               )}
+              </div>
               <button
                 type="button"
                 onClick={handleSaveCustomer}
                 disabled={quickAddLoading || !customerName.trim()}
                 className="px-3 py-1.5 bg-red-950/60 rounded-lg hover:bg-red-900/70 text-red-200 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {quickAddLoading ? 'Saving...' : selectedCustomer ? 'Update' : 'Save'}
+                {quickAddLoading ? 'Saving...' : selectedCustomer && customerName.trim() ? 'Update' : 'Save'}
               </button>
               <button type="button" onClick={() => setShowQuickAdd(true)} className="px-3 py-1.5 bg-red-950/60 rounded-lg hover:bg-red-900/70 text-red-200 text-sm whitespace-nowrap">
                 Quick Add
@@ -1219,9 +1507,9 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
                         className="flex-1 min-w-0 border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white placeholder-red-400/50"
                       />
                     )}
-                  {selectedSize && selectedSize.stockQty !== undefined && (
+                  {selectedSize && remainingPieceStock(selectedSize) !== undefined && (
                     <span className="text-xs text-red-300/90 whitespace-nowrap shrink-0">
-                      In stock: {selectedSize.stockQty}
+                      In stock: {remainingPieceStock(selectedSize)}
                     </span>
                   )}
                 </div>
@@ -1243,9 +1531,10 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
                         const width = s.widthFt || 0;
                         const feetRem = width > 0 ? remainingSqft / width : 0;
                         const st = String((s as { stockTypeLabel?: string }).stockTypeLabel || '').trim();
+                        const audience = priceAudienceLabel(s);
                         return (
                         <li
-                          key={`${s.bannerStockId ?? s.stickerStockId ?? s.sizeId}-${s.materialId ?? 0}-${st}`}
+                          key={`${s.bannerStockId ?? s.stickerStockId ?? s.sizeId}-${s.materialId ?? 0}-${st}-${s.priceAudience ?? ''}`}
                           onClick={() => {
                             applyRollSizePick(s);
                             setSizeDropdownOpen(false);
@@ -1258,10 +1547,11 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
                               ? `${s.widthFt ?? 0} ft roll${st ? ` - ${st}` : ''} - ${round2(feetRem)} ft / ${remainingSqft} sqft available`
                               : formatSizeDisplay(s.sizeName) || s.sizeName}{' '}
                             {!isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && '(in)'}
+                            {audience ? ` · ${audience}` : ''}
                           </span>
                           <span className="flex items-center gap-2 text-red-300/70 text-sm shrink-0">
-                            {(s.stockQty !== undefined && selectedItem?.type !== 'banner_roll' && selectedItem?.type !== 'sticker_roll') && (
-                              <span className="text-emerald-400/90">Stock: {s.stockQty}</span>
+                            {remainingPieceStock(s) !== undefined && (
+                              <span className="text-emerald-400/90">Stock: {remainingPieceStock(s)}</span>
                             )}
                             {(s.calcType === 'sqft' || s.calcType === 'sqft_direct')
                               ? `Rs.${s.pricePerSqft ?? s.unitPrice}/sqft`
@@ -1449,7 +1739,16 @@ export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCa
               {advance > 0 && <span className="block text-xs text-amber-400/90 mt-0.5">Balance: Rs.{balance.toFixed(2)}</span>}
             </div>
           </div>
-          <div className="mt-4 flex justify-end">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            {!editingBill ? (
+              <p className={`text-sm ${counterPerson ? 'text-red-200/80' : 'text-amber-300'}`}>
+                {counterPerson ? `This bill will be saved under ${counterPerson}.` : 'Choose who is at the counter before saving the bill.'}
+              </p>
+            ) : (
+              <p className="text-sm text-red-200/80">
+                {editingBill.counter_staff_name ? `This bill was saved by ${editingBill.counter_staff_name}.` : 'No counter person was saved on this bill.'}
+              </p>
+            )}
             <button type="submit" disabled={loading} className="px-6 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? 'Saving...' : editingBill ? 'Save Changes' : 'Save Bill'}
             </button>

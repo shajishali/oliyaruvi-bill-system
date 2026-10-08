@@ -1,7 +1,7 @@
-/** Normalize size string for display: use x instead of + (e.g. 8+6 → 8x6) */
+/** Show a size as it was saved, including a plus such as 10+15. */
 export function formatSizeDisplay(size: string | undefined | null): string {
   if (!size) return '';
-  let s = String(size).replace(/\+/g, 'x');
+  let s = String(size);
 
   // Some catalog entries store a full label like "plastic momento 10 inches".
   // For bill printing we want to show only the measurement part: "10 inches".
@@ -14,9 +14,9 @@ export function formatSizeDisplay(size: string | undefined | null): string {
 
   // Some catalog entries store both name + dimension in the same field (e.g. "round 34X65").
   // For the Size column we want only the "34X65" part.
-  const xDim = s.match(/(\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?)/);
+  const xDim = s.match(/(\d+(?:\.\d+)?\s*[xX×+]\s*\d+(?:\.\d+)?)/);
   if (xDim?.[1]) {
-    return xDim[1].trim().replace(/\s*[xX]\s*/g, 'X');
+    return xDim[1].trim().replace(/\s*([xX×+])\s*/g, '$1');
   }
 
   return s;
@@ -29,10 +29,14 @@ export function parseSizeDimensions(size: string | undefined | null): [number, n
   return [parts[0] || 0, parts[1] || 0];
 }
 
-/** Normalize size for saving: use x instead of + */
+/** Keep the size text as typed, including 10+15. Drop wrapping quotes only. */
 export function normalizeSizeForSave(size: string | undefined | null): string {
   if (!size) return '';
-  return String(size).trim().replace(/\+/g, 'x');
+  let s = String(size).trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
 }
 
 /** Match backend `normalizeRollWidth`: store bare width number (e.g. "6 feet" → "6"). */

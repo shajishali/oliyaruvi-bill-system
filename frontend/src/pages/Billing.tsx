@@ -3,17 +3,23 @@ import Header from '../components/layout/Header';
 import BillForm from '../components/billing/BillForm';
 import BillList from '../components/billing/BillList';
 import PrintBill from '../components/billing/PrintBill';
+import CounterDuty from '../components/billing/CounterDuty';
 import type { Bill } from '../types';
 
 export default function Billing() {
   const [activeTab, setActiveTab] = useState('new');
   const [printBill, setPrintBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  const [counterPerson, setCounterPerson] = useState<string | null>(null);
+  const [counterRefresh, setCounterRefresh] = useState(0);
+  const [updatedBill, setUpdatedBill] = useState<Bill | null>(null);
 
   return (
     <>
       <Header title="Billing" />
       <div className="p-4 pb-6">
+        <CounterDuty refreshToken={counterRefresh} onActiveChange={setCounterPerson} />
+
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => {
@@ -42,6 +48,8 @@ export default function Billing() {
         {activeTab === 'new' && (
           <BillForm
             onBillCreated={(bill) => setPrintBill(bill)}
+            onSaved={() => setCounterRefresh((n) => n + 1)}
+            counterPerson={counterPerson}
             editingBill={editingBill}
             onEditSaved={() => setEditingBill(null)}
             onCancelEdit={() => {
@@ -52,6 +60,7 @@ export default function Billing() {
         )}
         {activeTab === 'list' && (
           <BillList
+            updatedBill={updatedBill}
             onPrint={(bill) => setPrintBill(bill)}
             onEdit={(bill) => {
               setEditingBill(bill);
@@ -61,7 +70,14 @@ export default function Billing() {
         )}
 
         {printBill && (
-          <PrintBill bill={printBill} onClose={() => setPrintBill(null)} onBillUpdated={setPrintBill} />
+          <PrintBill
+            bill={printBill}
+            onClose={() => setPrintBill(null)}
+            onBillUpdated={(bill) => {
+              setPrintBill(bill);
+              setUpdatedBill(bill);
+            }}
+          />
         )}
       </div>
     </>

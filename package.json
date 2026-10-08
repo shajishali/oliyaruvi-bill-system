@@ -1,6 +1,6 @@
 {
   "name": "oliyaruvi-printers",
-  "version": "1.0.3",
+  "version": "1.0.0",
   "description": "Oliyaruvi Printers - Billing System",
   "main": "electron/main.js",
   "scripts": {
@@ -59,7 +59,9 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "allowElevation": true
     }
   }
 }

@@ -121,7 +121,9 @@ function buildPrintHtml(
         const label = t.payment_type === 'advance' ? 'Advance' : 'Balance';
         const dateStr = formatPaymentDate(t.paid_at);
         return `<div class="bill-info"><span>${label} Rs.${parseFloat(String(t.amount)).toFixed(2)} on ${dateStr} (${t.payment_method})</span></div>`;
-      }).join('') + (isFullyPaid ? `<div class="bill-info"><span>Status</span><span class="num">Paid</span></div>` : '')
+      }).join('') + (isFullyPaid
+        ? `<div class="bill-info"><span>Status</span><span class="num">Paid</span></div>`
+        : `<div class="bill-info"><span>Balance due</span><span class="num">Rs.${(parseFloat(String(bill.total)) - (bill.amount_paid ?? 0)).toFixed(2)}</span></div>`)
     : isFullyPaid
       ? `<div class="bill-info"><span>Status</span><span class="num">Paid</span></div>`
       : (bill.amount_paid ?? 0) > 0
@@ -229,8 +231,17 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-black/95 backdrop-blur-sm rounded-xl shadow-xl border border-red-950/60 max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b border-red-950/50 shrink-0 min-h-[52px]">
-          <h3 className="text-base font-semibold text-white leading-none flex items-center">Print Preview</h3>
+          <h3 className="text-base font-semibold text-white leading-none flex items-center">Bill {currentBill.bill_number}</h3>
           <div className="flex flex-wrap items-center gap-3">
+            {!isPaid && (
+              <button
+                type="button"
+                onClick={() => setShowPayBalance(true)}
+                className="h-9 px-4 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium"
+              >
+                Pay balance
+              </button>
+            )}
             <div className="flex items-center gap-2">
               <label className="text-sm text-red-200/90 whitespace-nowrap">Paper:</label>
               <select
@@ -271,7 +282,10 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
               <span>Bill #: {currentBill.bill_number}</span>
               <span>Date: {currentBill.bill_date}</span>
             </div>
-            <div className={`mb-3 ${isThermal ? 'text-[10px]' : 'text-sm'}`}>Customer: {currentBill.customer_name}</div>
+            <div className={`mb-3 ${isThermal ? 'text-[10px]' : 'text-sm'}`}>
+              Customer: {currentBill.customer_name}
+              {currentBill.customer_phone ? ` · ${currentBill.customer_phone}` : ''}
+            </div>
             <table className={`w-full border-collapse ${isThermal ? 'text-[10px]' : 'text-sm'}`}>
               <thead>
                 <tr className="bg-gray-100">
@@ -312,7 +326,7 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
                 <span>Total</span>
                 <span>Rs.{parseFloat(String(currentBill.total)).toFixed(2)}</span>
               </div>
-              {(currentBill.payment_transactions?.length ?? 0) > 0 ? (
+              {(currentBill.payment_transactions?.length ?? 0) > 0 && (
                 <div className="mt-2 space-y-1">
                   {currentBill.payment_transactions!.map((t, i) => (
                     <div key={i} className="flex justify-between text-sm">
@@ -320,17 +334,20 @@ export default function PrintBill({ bill, onClose, onBillUpdated }: PrintBillPro
                     </div>
                   ))}
                 </div>
-              ) : isPaid ? (
+              )}
+              {isPaid ? (
                 <div className="flex justify-between text-emerald-700 font-semibold text-sm mt-1">
                   <span>Status</span>
                   <span>Paid</span>
                 </div>
-              ) : paid > 0 && (
+              ) : (
                 <>
-                  <div className="flex justify-between text-sm mt-1">
-                    <span>Advance paid</span>
-                    <span>Rs.{paid.toFixed(2)}</span>
-                  </div>
+                  {paid > 0 && (
+                    <div className="flex justify-between text-sm mt-1">
+                      <span>Paid so far</span>
+                      <span>Rs.{paid.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-amber-700 font-semibold text-sm mt-1">
                     <span>Balance due</span>
                     <span>Rs.{balance.toFixed(2)}</span>

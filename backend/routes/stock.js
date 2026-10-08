@@ -3,6 +3,10 @@ const router = express.Router();
 const db = require('../config/database');
 const { log } = require('../lib/activityLog');
 
+function normalizePriceAudience(value) {
+  return String(value || '').trim().toLowerCase() === 'st' ? 'st' : 'local';
+}
+
 // POST create new frame size
 router.post('/frames', (req, res) => {
   try {
@@ -319,7 +323,7 @@ router.get('/custom-sale-items', (req, res) => {
 
 router.post('/custom-sale-items', (req, res) => {
   try {
-    const { section_id, item_name, item_type = '', qty_type = 'per_sqft', unit_price = 0, size_name = '' } = req.body;
+    const { section_id, item_name, item_type = '', qty_type = 'per_sqft', unit_price = 0, size_name = '', price_audience } = req.body;
     if (!section_id || !String(section_id).trim()) return res.status(400).json({ error: 'section_id required' });
     if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'item_name required' });
     const it = String(item_type || '').trim();
@@ -327,16 +331,23 @@ router.post('/custom-sale-items', (req, res) => {
     const price = parseFloat(String(unit_price)) || 0;
     const sz = String(size_name || '').trim();
 
+    const audience = normalizePriceAudience(price_audience);
     const result = db.prepare(`
-      INSERT INTO custom_section_sale_items (section_id, item_name, item_type, qty_type, unit_price, size_name)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(String(section_id).trim(), String(item_name).trim(), it, qty, price, sz);
+      INSERT INTO custom_section_sale_items (section_id, item_name, item_type, qty_type, unit_price, size_name, price_audience)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(String(section_id).trim(), String(item_name).trim(), it, qty, price, sz, audience);
 
     const created = db.prepare('SELECT * FROM custom_section_sale_items WHERE id = ?').get(result.lastInsertRowid);
+    log('price_added', 'price', created.id, {
+      item_name: created.item_name,
+      size_name: created.size_name,
+      new_price: created.unit_price,
+      price_audience: created.price_audience,
+    });
     res.status(201).json(created);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE constraint')) {
-      return res.status(400).json({ error: 'This sale item already exists in this section.' });
+      return res.status(400).json({ error: 'This sale item already exists in this section for that ST/Local choice.' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -348,7 +359,7 @@ router.put('/custom-sale-items/:id', (req, res) => {
     const row = db.prepare('SELECT * FROM custom_section_sale_items WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: 'Sale item not found' });
 
-    const { item_name, item_type, qty_type, unit_price, size_name } = req.body;
+    const { item_name, item_type, qty_type, unit_price, size_name, price_audience } = req.body;
     const updates = [];
     const params = [];
     if (item_name !== undefined && String(item_name).trim()) { updates.push('item_name = ?'); params.push(String(item_name).trim()); }
@@ -356,11 +367,19 @@ router.put('/custom-sale-items/:id', (req, res) => {
     if (qty_type !== undefined) { updates.push('qty_type = ?'); params.push(qty_type === 'per_unit' ? 'per_unit' : 'per_sqft'); }
     if (unit_price !== undefined) { updates.push('unit_price = ?'); params.push(parseFloat(String(unit_price)) || 0); }
     if (size_name !== undefined) { updates.push('size_name = ?'); params.push(String(size_name || '').trim()); }
+    if (price_audience !== undefined) { updates.push('price_audience = ?'); params.push(normalizePriceAudience(price_audience)); }
     if (updates.length === 0) return res.status(400).json({ error: 'No updates provided' });
 
     params.push(id);
     db.prepare(`UPDATE custom_section_sale_items SET ${updates.join(', ')}, created_at = created_at WHERE id = ?`).run(...params);
     const updated = db.prepare('SELECT * FROM custom_section_sale_items WHERE id = ?').get(id);
+    log('price_changed', 'price', updated.id, {
+      item_name: updated.item_name,
+      size_name: updated.size_name,
+      old_price: row.unit_price,
+      new_price: updated.unit_price,
+      price_audience: updated.price_audience,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -372,6 +391,12 @@ router.delete('/custom-sale-items/:id', (req, res) => {
     const row = db.prepare('SELECT * FROM custom_section_sale_items WHERE id = ?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sale item not found' });
     db.prepare('DELETE FROM custom_section_sale_items WHERE id = ?').run(req.params.id);
+    log('price_removed', 'price', row.id, {
+      item_name: row.item_name,
+      size_name: row.size_name,
+      old_price: row.unit_price,
+      price_audience: row.price_audience,
+    });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

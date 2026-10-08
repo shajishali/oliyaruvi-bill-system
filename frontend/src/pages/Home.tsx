@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth, isValidEmail } from '../contexts/AuthContext';
 import { FORGOT_PASSWORD_EMAIL } from '../constants/adminAuth';
 import { api } from '../api/client';
+import ShopLogo from '../components/ShopLogo';
 
 type ModalView = 'login' | 'forgot';
 type ForgotStep = 'email' | 'otp' | 'password';
@@ -13,14 +14,15 @@ export default function Home() {
   const [modalView, setModalView] = useState<ModalView>('login');
 
   // Login form state
-  const [loginEmail, setLoginEmail] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginSubmitting, setLoginSubmitting] = useState(false);
 
   // Register form state (first-time only)
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [branchName, setBranchName] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [regError, setRegError] = useState('');
@@ -42,10 +44,10 @@ export default function Home() {
     e.preventDefault();
     setLoginError('');
     setLoginSubmitting(true);
-    const result = login(loginEmail, loginPassword);
+    const result = login(loginUsername, loginPassword);
     if (result.success) {
       try {
-        await api.reports.logActivity('user_login', { email: loginEmail.trim() });
+        await api.reports.logActivity('user_login', { username: loginUsername.trim() });
       } catch (_) {}
       navigate('/app');
     } else {
@@ -61,11 +63,22 @@ export default function Home() {
       setRegError('Passwords do not match');
       return;
     }
+    if (!branchName.trim()) {
+      setRegError('Branch name is required');
+      return;
+    }
     setRegSubmitting(true);
-    const result = register(name, email, password);
+    try {
+      await api.settings.setBranchName(branchName.trim());
+    } catch (err) {
+      setRegError((err as Error).message);
+      setRegSubmitting(false);
+      return;
+    }
+    const result = register(name, username, password);
     if (result.success) {
       try {
-        await api.reports.logActivity('user_registered', { email: email.trim(), name: name.trim() });
+        await api.reports.logActivity('user_registered', { username: username.trim(), name: name.trim() });
       } catch (_) {}
       navigate('/app');
     } else {
@@ -119,13 +132,7 @@ export default function Home() {
       return;
     }
     setForgotSubmitting(true);
-    let result = resetPassword(forgotEmail, newPassword);
-    if (!result.success && result.error === 'No account found with this email.') {
-      const isAllowedResetEmail = forgotEmail.trim().toLowerCase() === FORGOT_PASSWORD_EMAIL.toLowerCase();
-      if (isAllowedResetEmail) {
-        result = register('Owner', forgotEmail.trim(), newPassword);
-      }
-    }
+    const result = resetPassword(forgotEmail, newPassword);
     if (result.success) {
       try {
         await api.reports.logActivity('password_changed', { email: forgotEmail.trim() });
@@ -158,13 +165,13 @@ export default function Home() {
 
   const cardClass = 'bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-4 shadow-xl';
   const inputClass = 'w-full border border-red-900/50 rounded-lg px-3 py-1.5 bg-black/60 text-white placeholder-red-400/50 text-sm';
-  const labelClass = 'block text-sm font-medium text-red-200/90 mb-0.5';
+  const labelClass = 'block text-sm font-medium text-white mb-0.5';
   const btnPrimary = 'w-full py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
     <div className="text-center px-6 py-5 rounded-2xl bg-gray-900/20 backdrop-blur-md border border-gray-700/20">
       <div className="flex justify-center mb-3">
-        <img src={`${import.meta.env.BASE_URL}logo.jpeg`} alt="OLIYARUVI PRINTERS" className="h-16 w-auto object-contain drop-shadow" />
+        <ShopLogo className="h-16 w-auto object-contain drop-shadow" />
       </div>
       <h1 className="text-4xl font-bold text-white mb-1" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5)' }}>
         OLIYARUVI PRINTERS
@@ -177,7 +184,7 @@ export default function Home() {
       {!hasUsers && (
         <div className={cardClass} style={{ maxWidth: '400px', margin: '0 auto' }}>
           <h2 className="text-xl font-bold text-white mb-2 text-center">Create Account</h2>
-          <p className="text-red-200/80 text-sm mb-3">First time setup. Register to get started.</p>
+          <p className="text-red-100 text-sm mb-3">First time setup. Register to get started.</p>
           {regError && <div className="mb-3 p-2 bg-red-950/80 text-red-200 rounded-lg text-sm">{regError}</div>}
           <form onSubmit={handleRegister} className="space-y-2.5">
             <div>
@@ -192,13 +199,25 @@ export default function Home() {
               />
             </div>
             <div>
-              <label className={labelClass}>Email</label>
+              <label className={labelClass}>Branch name</label>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="text"
+                value={branchName}
+                onChange={(e) => setBranchName(e.target.value)}
                 className={inputClass}
-                placeholder="e.g. name@example.com"
+                placeholder="e.g. Main branch"
+                required
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className={inputClass}
+                placeholder="e.g. shaji"
+                autoComplete="username"
                 required
               />
             </div>
@@ -240,13 +259,14 @@ export default function Home() {
               {loginError && <div className="mb-3 p-2 bg-red-950/80 text-red-200 rounded-lg text-sm">{loginError}</div>}
               <form onSubmit={handleLogin} className="space-y-2.5">
                 <div>
-                  <label className={labelClass}>Email</label>
+                  <label className={labelClass}>Username</label>
                   <input
-                    type="email"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
+                    type="text"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
                     className={inputClass}
-                    placeholder="e.g. name@example.com"
+                    placeholder="Enter your username"
+                    autoComplete="username"
                     required
                   />
                 </div>
@@ -282,7 +302,7 @@ export default function Home() {
                 </div>
               ) : forgotStep === 'email' ? (
                 <>
-                  <p className="text-red-200/80 text-sm mb-3">Enter your registered email to receive OTP.</p>
+                  <p className="text-red-100 text-sm mb-3">Enter your registered email to receive OTP.</p>
                   {forgotError && <div className="mb-3 p-2 bg-red-950/80 text-red-200 rounded text-sm">{forgotError}</div>}
                   <form onSubmit={handleForgotEmailSubmit} className="space-y-3">
                     <div>
@@ -327,7 +347,7 @@ export default function Home() {
               ) : (
                 <>
                   <button type="button" onClick={() => { setForgotStep('otp'); setForgotError(''); }} className="text-xs text-red-300 hover:text-red-200 mb-2">← Back</button>
-                  <p className="text-red-200/80 text-sm mb-3">Set your new password.</p>
+                  <p className="text-red-100 text-sm mb-3">Set your new password.</p>
                   {forgotError && <div className="mb-3 p-2 bg-red-950/80 text-red-200 rounded text-sm">{forgotError}</div>}
                   <form onSubmit={handleForgotPasswordSubmit} className="space-y-3">
                     <div>

@@ -3,12 +3,14 @@ import Header from '../components/layout/Header';
 import StockTable from '../components/stock/StockTable';
 import StockModal from '../components/stock/StockModal';
 import StockTransactionLog from '../components/stock/StockTransactionLog';
-import AddItemModal from '../components/stock/AddItemModal';
+import AddItemModal, { type StockChoice } from '../components/stock/AddItemModal';
 import AddBannerStockModal from '../components/stock/AddBannerStockModal';
 import AddStickerStockModal from '../components/stock/AddStickerStockModal';
 import AddCustomRollItemModal from '../components/stock/AddCustomRollItemModal';
 import { api } from '../api/client';
+import BranchTransfers from '../components/stock/BranchTransfers';
 import { STOCK_SECTIONS_KEY, STOCK_CUSTOM_LABELS_KEY } from '../constants/stockSections';
+import { requestAdminPermission } from '../components/admin/AdminPermission';
 
 type SectionId = 'frames' | 'photos' | 'log' | string;
 
@@ -26,6 +28,19 @@ interface StockItem {
   stock_qty?: number;
   feet_remaining?: number;
   low_stock_threshold?: number;
+}
+
+function rollChoices(rows: StockItem[], typeKey: 'stock_type' | 'item_type'): StockChoice[] {
+  return rows.map((row) => {
+    const size = (row.size_name || '').trim();
+    const bare = size.replace(/\s*feet?\s*/gi, '').replace(/\s*ft\s*/gi, '').trim();
+    const width = parseFloat(bare);
+    return {
+      type: (row[typeKey] || '').trim(),
+      size,
+      sizeLabel: Number.isNaN(width) ? size : `${width} ft`,
+    };
+  }).filter((row) => row.size);
 }
 
 function getSectionLabel(id: string, customLabels: Record<string, string>): string {
@@ -84,6 +99,9 @@ function getDefaultCustomLabels(): Record<string, string> {
 
 export default function StockManagement() {
   const [enabledSections, setEnabledSections] = useState<SectionId[]>(getDefaultSections);
+  const [sectionsReady, setSectionsReady] = useState(() => {
+    try { return localStorage.getItem(STOCK_SECTIONS_KEY) != null; } catch { return false; }
+  });
   const [customLabels, setCustomLabels] = useState<Record<string, string>>(getDefaultCustomLabels);
   const [activeTab, setActiveTab] = useState<SectionId | null>(() => {
     const defaults = getDefaultSections();
@@ -116,12 +134,14 @@ export default function StockManagement() {
   const [stickerStock, setStickerStock] = useState<StockItem[]>([]);
 
   useEffect(() => {
+    if (!sectionsReady) return;
     localStorage.setItem(STOCK_SECTIONS_KEY, JSON.stringify(enabledSections));
-  }, [enabledSections]);
+  }, [enabledSections, sectionsReady]);
 
   useEffect(() => {
+    if (!sectionsReady) return;
     localStorage.setItem(STOCK_CUSTOM_LABELS_KEY, JSON.stringify(customLabels));
-  }, [customLabels]);
+  }, [customLabels, sectionsReady]);
 
   useEffect(() => {
     if (enabledSections.length === 0) {
@@ -134,6 +154,7 @@ export default function StockManagement() {
   }, [enabledSections, activeTab]);
 
   const removeSectionFromBar = async (sectionId: SectionId) => {
+    if (!(await requestAdminPermission())) return;
     const label = getSectionLabel(sectionId, customLabels);
     const isCustom = String(sectionId).startsWith('custom-');
     const msg = isCustom
@@ -303,8 +324,8 @@ export default function StockManagement() {
     }
   };
 
-  const fetchData = () => {
-    setLoading(true);
+  const fetchData = (silent = false) => {
+    if (!silent) setLoading(true);
     Promise.all([
       api.stock.frames(),
       api.stock.photos(),
@@ -357,6 +378,27 @@ export default function StockManagement() {
         setTransactions(Array.isArray(t) ? t : []);
         setBannerStock(Array.isArray(bs) ? bs : []);
         setStickerStock(Array.isArray(ss) ? ss : []);
+        let savedSections = true;
+        try { savedSections = localStorage.getItem(STOCK_SECTIONS_KEY) != null; } catch { savedSections = true; }
+        if (!savedSections) {
+          const next: SectionId[] = [];
+          if (Array.isArray(f) && f.length) next.push('frames');
+          if (Array.isArray(p) && p.length) next.push('photos');
+          if (Array.isArray(bs) && bs.length) next.push('banner');
+          if (Array.isArray(ss) && ss.length) next.push('sticker');
+          const labels: Record<string, string> = {};
+          for (const section of (Array.isArray(cs) ? cs : []) as { section_id?: string; label?: string }[]) {
+            if (!section.section_id) continue;
+            next.push(section.section_id);
+            if (section.label) labels[section.section_id] = section.label;
+          }
+          if (next.length) {
+            setEnabledSections(next);
+            setCustomLabels((prev) => ({ ...labels, ...prev }));
+            setActiveTab(next[0]);
+          }
+          setSectionsReady(true);
+        }
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -389,10 +431,14 @@ export default function StockManagement() {
   };
 
   const handleEditStock = (item: StockItem, itemType: string, isRollType = false) => {
-    setStockModal({ type: 'edit', item, itemType, isRollType });
+    void (async () => {
+      if (!(await requestAdminPermission({ force: true }))) return;
+      setStockModal({ type: 'edit', item, itemType, isRollType });
+    })();
   };
 
   const handleRemoveBannerOrSticker = async (item: StockItem, type: 'banner' | 'sticker') => {
+    if (!(await requestAdminPermission())) return;
     const label = type === 'banner' ? 'banner size' : 'sticker size';
     if (!window.confirm(`Remove this ${label} (${item.size_name ?? item.material_name})? You can add it again later.`)) return;
     setError('');
@@ -406,6 +452,7 @@ export default function StockManagement() {
   };
 
   const handleRemoveFrameOrPhoto = async (item: StockItem, type: 'frame' | 'photo') => {
+    if (!(await requestAdminPermission())) return;
     const label = type === 'frame' ? 'frame size' : 'photo size';
     const name = item.size_name ?? item.material_name ?? '';
     if (!window.confirm(`Remove this ${label} (${name})? You can add it again later.`)) return;
@@ -420,6 +467,7 @@ export default function StockManagement() {
   };
 
   const handleRemovePhotocopy = async (item: StockItem) => {
+    if (!(await requestAdminPermission())) return;
     const name = item.size_name ?? item.material_name ?? '';
     if (!window.confirm(`Remove this photocopy size (${name})? You can add it again later.`)) return;
     setError('');
@@ -483,6 +531,7 @@ export default function StockManagement() {
   };
 
   const handleRemoveCustomSectionItem = async (item: StockItem) => {
+    if (!(await requestAdminPermission())) return;
     const name = item.size_name ?? item.material_name ?? '';
     if (!window.confirm(`Remove "${name}" from this section? You can add it again later.`)) return;
     setError('');
@@ -525,6 +574,7 @@ export default function StockManagement() {
       price_unit?: 'per_sqft' | 'per_qty';
     }
   ) => {
+    if (!(await requestAdminPermission())) return;
     setError('');
     try {
       await api.stock.updateBanner(id, {
@@ -554,6 +604,7 @@ export default function StockManagement() {
       stock_type: string;
     }
   ) => {
+    if (!(await requestAdminPermission())) return;
     setError('');
     try {
       await api.stock.updateSticker(id, data);
@@ -564,18 +615,39 @@ export default function StockManagement() {
     }
   };
 
-  const handleStockModalConfirm = async ({ quantity, reason, transaction_type }: { quantity: number; reason: string | null; transaction_type?: string }) => {
+  const handleStockModalConfirm = async ({
+    quantity,
+    reason,
+    transaction_type,
+    size_name,
+    frame_type,
+  }: {
+    quantity: number;
+    reason: string | null;
+    transaction_type?: string;
+    size_name?: string;
+    frame_type?: string;
+  }) => {
     if (!stockModal) return;
+    if (!(await requestAdminPermission())) return;
     const { type, item, itemType } = stockModal;
     const txType = transaction_type || (type === 'edit' ? 'add' : type);
     try {
-      await api.stock.addTransaction({
-        item_type: itemType,
-        item_id: item.id,
-        transaction_type: txType,
-        quantity,
-        reason,
-      });
+      if (itemType === 'frame' && size_name) {
+        await api.stock.updateFrame(item.id, {
+          size_name,
+          frame_type: frame_type ?? item.frame_type ?? '',
+        });
+      }
+      if (quantity > 0) {
+        await api.stock.addTransaction({
+          item_type: itemType,
+          item_id: item.id,
+          transaction_type: txType,
+          quantity,
+          reason,
+        });
+      }
       fetchData();
       setStockModal(null);
     } catch (err) {
@@ -602,6 +674,9 @@ export default function StockManagement() {
     <>
       <Header title="Stock Management" />
       <div className="p-6">
+        <p className="text-sm text-red-300/75 mb-4">Editing or deleting stock needs admin permission. Adding stock does not.</p>
+        <BranchTransfers onStockChanged={() => fetchData(true)} />
+
         {error && (
           <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg border border-red-900/50 flex justify-between items-center">
             <span>{error}</span>
@@ -899,6 +974,13 @@ export default function StockManagement() {
         {addModal && (
           <AddItemModal
             itemType={addModal}
+            suggestions={
+              addModal === 'frame'
+                ? frames.map((row) => ({ type: (row.frame_type || 'Standard').trim() || 'Standard', size: (row.size_name || '').trim() })).filter((row) => row.size)
+                : addModal === 'photo'
+                  ? photos.map((row) => ({ size: (row.size_name || '').trim() })).filter((row) => row.size)
+                  : photocopy.map((row) => ({ size: (row.size_name || '').trim() })).filter((row) => row.size)
+            }
             onClose={() => setAddModal(null)}
             onConfirm={handleAddItem}
             onError={(msg) => setError(msg)}
@@ -909,6 +991,10 @@ export default function StockManagement() {
           <AddItemModal
             key={`${customAddSectionId}-count`}
             itemType="custom"
+            suggestions={(customBySection[customAddSectionId] || []).map((row): StockChoice => ({
+              type: (row.item_type || '').trim(),
+              size: (row.size_name || '').trim(),
+            })).filter((row) => row.size)}
             onClose={() => { setCustomAddSectionId(null); setCustomAddSectionKind(null); }}
             onConfirm={handleAddCustomSectionItem}
             onError={(msg) => setError(msg)}
@@ -917,6 +1003,7 @@ export default function StockManagement() {
         {customAddSectionId && customAddSectionKind === 'roll' && (
           <AddCustomRollItemModal
             key={`${customAddSectionId}-roll`}
+            suggestions={rollChoices(customBySection[customAddSectionId] || [], 'item_type')}
             onClose={() => { setCustomAddSectionId(null); setCustomAddSectionKind(null); }}
             onConfirm={handleAddCustomSectionRollItem}
             onError={(msg) => setError(msg)}
@@ -925,6 +1012,7 @@ export default function StockManagement() {
 
         {addBannerModal && (
           <AddBannerStockModal
+            suggestions={rollChoices(bannerStock, 'stock_type')}
             onClose={() => setAddBannerModal(false)}
             onConfirm={handleAddBannerStock}
             onError={(msg) => setError(msg)}
@@ -933,6 +1021,7 @@ export default function StockManagement() {
 
         {addStickerModal && (
           <AddStickerStockModal
+            suggestions={rollChoices(stickerStock, 'stock_type')}
             onClose={() => setAddStickerModal(false)}
             onConfirm={handleAddStickerStock}
             onError={(msg) => setError(msg)}
