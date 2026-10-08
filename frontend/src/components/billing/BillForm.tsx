@@ -8,6 +8,9 @@ import { buildBillingPlaceholderOptions } from '../../constants/billingItemPlace
 
 interface BillFormProps {
   onBillCreated: (bill: Bill) => void;
+  editingBill?: Bill | null;
+  onEditSaved?: (bill: Bill) => void;
+  onCancelEdit?: () => void;
 }
 
 type BillFormLineItem = BillItem & {
@@ -18,11 +21,73 @@ type BillFormLineItem = BillItem & {
   metadata?: Record<string, unknown>;
 };
 
-export default function BillForm({ onBillCreated }: BillFormProps) {
+const parseBillItemMetadata = (metadata: BillItem['metadata']): Record<string, unknown> => {
+  if (!metadata) return {};
+  if (typeof metadata === 'string') {
+    try {
+      const parsed = JSON.parse(metadata);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return metadata;
+};
+
+interface EditNumberInputProps {
+  value: number;
+  min?: number;
+  step?: number;
+  widthClass: string;
+  onValueChange: (value: number) => void;
+}
+
+function EditNumberInput({ value, min = 0, step = 1, widthClass, onValueChange }: EditNumberInputProps) {
+  const decimals = String(step).includes('.') ? String(step).split('.')[1].length : 0;
+  const normalize = (next: number) => {
+    const rounded = Number(next.toFixed(decimals));
+    return Math.max(min, rounded);
+  };
+  const bump = (direction: 1 | -1) => onValueChange(normalize((Number(value) || 0) + direction * step));
+
+  return (
+    <div className={`inline-flex ${widthClass} overflow-hidden rounded border border-red-900/50 bg-black/60 focus-within:ring-1 focus-within:ring-red-700/70`}>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onValueChange(normalize(parseFloat(e.target.value.replace(/[^0-9.]/g, '')) || 0))}
+        className="min-w-0 flex-1 bg-transparent px-2 py-1 text-right text-sm tabular-nums text-white outline-none"
+      />
+      <div className="flex w-7 shrink-0 flex-col border-l border-red-900/60 bg-white/90 text-black">
+        <button
+          type="button"
+          onClick={() => bump(1)}
+          className="h-1/2 leading-none text-[10px] hover:bg-red-100"
+          aria-label="Increase"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={() => bump(-1)}
+          className="h-1/2 border-t border-black/10 leading-none text-[10px] hover:bg-red-100"
+          aria-label="Decrease"
+        >
+          -
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function BillForm({ onBillCreated, editingBill, onEditSaved, onCancelEdit }: BillFormProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
+  const [activeCustomerSearchField, setActiveCustomerSearchField] = useState<'name' | 'phone'>('name');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
@@ -54,6 +119,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   /** Stock row `stock_type` (banner/sticker tabs) — filters roll widths in Size */
   const [selectedStockTypeKey, setSelectedStockTypeKey] = useState('');
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
+  const [savedBillWasEdit, setSavedBillWasEdit] = useState(false);
   const addRowRef = useRef<HTMLTableRowElement>(null);
   const customerSectionRef = useRef<HTMLDivElement>(null);
   const addItemsSectionRef = useRef<HTMLDivElement>(null);
@@ -63,20 +129,22 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   const [itemDropdownRect, setItemDropdownRect] = useState<DOMRect | null>(null);
   const [sizeDropdownRect, setSizeDropdownRect] = useState<DOMRect | null>(null);
 
-  const fetchBillableItems = () => {
+  const fetchBillableItems = (scrollToItems = true) => {
     setBillableItemsLoading(true);
     setBillableItemsError(null);
-    api.services.billableItems()
+    return api.services.billableItems()
       .then((items) => {
         setBillableItems(items);
         setBillableItemsError(null);
-        if (items.length > 0) {
+        if (scrollToItems && items.length > 0) {
           addItemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
+        return items;
       })
       .catch((err) => {
         setBillableItems([]);
         setBillableItemsError((err as Error).message || 'Failed to load items. Is the backend running on port 5000?');
+        return [];
       })
       .finally(() => setBillableItemsLoading(false));
   };
@@ -88,18 +156,19 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   // Re-fetch whenever the tab becomes visible (user switches back from another page/app)
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible') fetchBillableItems();
+      if (document.visibilityState === 'visible') fetchBillableItems(false);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   useEffect(() => {
-    if (customerSearch.length < 2) {
+    const q = customerSearch.trim();
+    if (q.length < 2) {
       setCustomers([]);
       return;
     }
-    api.customers.search(customerSearch).then(setCustomers);
+    api.customers.search(q).then(setCustomers);
   }, [customerSearch]);
 
   useEffect(() => {
@@ -133,6 +202,45 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     }
   }, [sizeDropdownOpen]);
 
+  useEffect(() => {
+    if (!editingBill) return;
+
+    setSavedBill(null);
+    setError('');
+    setCustomerName(editingBill.customer_name || '');
+    setCustomerPhone(editingBill.customer_phone || '');
+    setCustomerSearch('');
+    setCustomers([]);
+    setSelectedCustomer(
+      editingBill.customer_id
+        ? {
+            id: editingBill.customer_id,
+            name: editingBill.customer_name || '',
+            phone: editingBill.customer_phone || null,
+          }
+        : null
+    );
+    setPaymentMethod(editingBill.payment_method || 'Cash');
+    setNotes(editingBill.notes || '');
+    setAdvanceStr('');
+    setItems(
+      (editingBill.items || []).map((item) => ({
+        ...item,
+        discount: item.item_discount ?? item.discount ?? 0,
+        metadata: parseBillItemMetadata(item.metadata),
+      }))
+    );
+    setSelectedItem(null);
+    setSelectedSize(null);
+    setSelectedStockTypeKey('');
+    setItemSearch('');
+    setManualSizeInput('');
+    setQuantity('');
+    setUnitPriceStr('');
+    setItemDiscountStr('');
+    addItemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [editingBill]);
+
   const advanceAmount = parseFloat(advanceStr) || 0;
   const subtotal = items.reduce((sum, i) => sum + (i.subtotal || 0), 0);
   const total = subtotal;
@@ -146,9 +254,26 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     const q = itemSearch.trim().toLowerCase();
     if (!q) return itemListOptions;
     return itemListOptions.filter(
-      (o) => o.label.toLowerCase().includes(q) || o.display.toLowerCase().includes(q)
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        o.display.toLowerCase().includes(q) ||
+        o.groupLabel.toLowerCase().includes(q)
     );
   }, [itemListOptions, itemSearch]);
+
+  const groupedItemOptions = useMemo(() => {
+    const groups: { label: string; options: typeof filteredItemOptions }[] = [];
+    for (const option of filteredItemOptions) {
+      const group = option.groupLabel || 'Settings items';
+      let existing = groups.find((g) => g.label === group);
+      if (!existing) {
+        existing = { label: group, options: [] };
+        groups.push(existing);
+      }
+      existing.options.push(option);
+    }
+    return groups;
+  }, [filteredItemOptions]);
 
   const manualEntryActive = !selectedItem && itemSearch.trim().length > 0;
 
@@ -156,6 +281,65 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     t === 'banner' || t === 'banner_roll' || t === 'sticker_roll';
   const isBannerOrStickerOrCustomRoll = (t?: string, calcType?: string) =>
     isBannerOrSticker(t) || (t === 'custom' && calcType === 'sqft_direct');
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const rollStockKeyForItem = (item: BillableItem | BillFormLineItem | null | undefined) => {
+    const meta = (item as { metadata?: Record<string, unknown> } | null | undefined)?.metadata;
+    const bannerId =
+      (item as { bannerStockId?: number } | null | undefined)?.bannerStockId ??
+      (typeof meta?.banner_stock_id === 'number' ? meta.banner_stock_id : undefined);
+    if (bannerId != null) return `banner:${bannerId}`;
+
+    const stickerId =
+      (item as { stickerStockId?: number } | null | undefined)?.stickerStockId ??
+      (typeof meta?.sticker_stock_id === 'number' ? meta.sticker_stock_id : undefined);
+    if (stickerId != null) return `sticker:${stickerId}`;
+
+    const customId =
+      (item as { customItemId?: number | null } | null | undefined)?.customItemId ??
+      (typeof meta?.custom_item_id === 'number' ? meta.custom_item_id : undefined);
+    if (
+      customId != null &&
+      (item as { service_type?: string; type?: string })?.service_type === 'custom' &&
+      rollWidthForItem(item) > 0
+    ) {
+      return `custom:${customId}`;
+    }
+    if (customId != null && (item as { type?: string; calcType?: string })?.type === 'custom' && (item as { calcType?: string })?.calcType === 'sqft_direct') {
+      return `custom:${customId}`;
+    }
+
+    return null;
+  };
+
+  const rollWidthForItem = (item: BillableItem | BillFormLineItem | null | undefined) => {
+    const meta = (item as { metadata?: Record<string, unknown> } | null | undefined)?.metadata;
+    const metaWidth = typeof meta?.width_ft === 'number' ? meta.width_ft : parseFloat(String(meta?.width_ft || ''));
+    if (metaWidth > 0) return metaWidth;
+    return (item as { widthFt?: number } | null | undefined)?.widthFt || 0;
+  };
+
+  const getBaseRollAvailableSqft = (item: BillableItem | null | undefined) => {
+    if (!item || !isBannerOrStickerOrCustomRoll(item.type, item.calcType)) return 0;
+    const width = item.widthFt || parseFloat(sizeWidthStr) || 0;
+    const feet = item.feetRemaining ?? (item.stockQty ?? 0) * 150;
+    return Math.max(0, width * feet);
+  };
+
+  const getPendingRollUsedSqft = (stockKey: string | null) => {
+    if (!stockKey) return 0;
+    return items.reduce((sum, item) => {
+      if (rollStockKeyForItem(item) !== stockKey) return sum;
+      return sum + (parseFloat(String(item.quantity)) || 0);
+    }, 0);
+  };
+
+  const getRemainingRollAvailableSqft = (item: BillableItem | null | undefined) => {
+    const base = getBaseRollAvailableSqft(item);
+    const pending = getPendingRollUsedSqft(rollStockKeyForItem(item));
+    return Math.max(0, round2(base - pending));
+  };
 
   const groupRowsForItem = useMemo(() => {
     if (!selectedItem) return [];
@@ -296,6 +480,11 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
 
     const qty = selectedItem?.calcType === 'sqft_direct' ? parseFloat(String(quantity)) : parseInt(String(quantity)) || 0;
     if (!selectedItem || !selectedSize || qty <= 0) return;
+    const remainingSqft = getRemainingRollAvailableSqft(selectedSize);
+    if (selectedItem.calcType === 'sqft_direct' && isBannerOrStickerOrCustomRoll(selectedItem.type, selectedItem.calcType) && qty > remainingSqft) {
+      setError(`Only ${remainingSqft} sqft available for this stock row`);
+      return;
+    }
 
     const sizeDisplay = formatSizeDisplay(selectedSize.sizeName) || selectedSize.sizeName;
     const labelFromApi = selectedSize.itemLabel?.trim();
@@ -394,15 +583,76 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     setItemSearch('');
   };
 
+  const updateExistingItem = (idx: number, patch: Partial<BillFormLineItem>) => {
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        const next = { ...item, ...patch };
+        const qty = parseFloat(String(next.quantity)) || 0;
+        const unit = parseFloat(String(next.unit_price)) || 0;
+        const discount = parseFloat(String(next.discount ?? next.item_discount ?? 0)) || 0;
+        return {
+          ...next,
+          discount,
+          subtotal: Math.max(0, qty * unit - discount),
+        };
+      })
+    );
+  };
+
   const removeItem = (idx: number) => setItems((prev) => prev.filter((_, i) => i !== idx));
+
+  const startManualItem = () => {
+    setSelectedItem(null);
+    setSelectedSize(null);
+    setSelectedStockTypeKey('');
+    setSizeWidthStr('');
+    setSizeLengthStr('');
+    setManualSizeInput('');
+    setUnitPriceStr('');
+    setItemDiscountStr('');
+    if (!itemSearch.trim()) setItemSearch('Manual item');
+    setManualPricingUnit('per_unit');
+    setItemDropdownOpen(false);
+    setSizeDropdownOpen(false);
+  };
+
+  const selectCustomer = (customer: Customer) => {
+    setSelectedCustomer(customer);
+    setCustomerName(customer.name);
+    setCustomerPhone(customer.phone || '');
+    setCustomerSearch('');
+    setCustomers([]);
+  };
+
+  const handleSaveCustomer = async () => {
+    const name = customerName.trim();
+    const phone = customerPhone.trim();
+    if (!name) {
+      setError('Customer name is required');
+      customerInputRef.current?.focus();
+      return;
+    }
+    setQuickAddLoading(true);
+    setError('');
+    try {
+      const c = selectedCustomer
+        ? await api.customers.update(selectedCustomer.id, { name, phone: phone || null })
+        : await api.customers.create({ name, phone: phone || null });
+      selectCustomer(c);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setQuickAddLoading(false);
+    }
+  };
 
   const handleQuickAddCustomer = async () => {
     if (!newCustomerName.trim()) return;
     setQuickAddLoading(true);
     try {
       const c = await api.customers.create({ name: newCustomerName.trim(), phone: newCustomerPhone || null });
-      setSelectedCustomer(c);
-      setCustomerName(c.name);
+      selectCustomer(c);
       setShowQuickAdd(false);
       setNewCustomerName('');
       setNewCustomerPhone('');
@@ -431,16 +681,40 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     setError('');
     setLoading(true);
     try {
-      const bill = await api.bills.create({
-        customer_id: selectedCustomer?.id || null,
+      let billCustomer = selectedCustomer;
+      const phone = customerPhone.trim();
+      if (!billCustomer && phone) {
+        billCustomer = await api.customers.create({ name, phone });
+        selectCustomer(billCustomer);
+      }
+      if (
+        billCustomer &&
+        (billCustomer.name !== name || (billCustomer.phone || '') !== phone)
+      ) {
+        billCustomer = await api.customers.update(billCustomer.id, { name, phone: phone || null });
+        selectCustomer(billCustomer);
+      }
+      const billPayload = {
+        customer_id: billCustomer?.id || null,
         customer_name: name,
+        customer_phone: phone || billCustomer?.phone || null,
         items,
         discount: 0,
         payment_method: paymentMethod,
         notes: notes || null,
-        advance_amount: advance,
-      });
+      };
+      const isEditing = !!editingBill;
+      const bill = isEditing
+        ? await api.bills.update(editingBill.id, billPayload)
+        : await api.bills.create({
+            customer_id: billCustomer?.id || null,
+            ...billPayload,
+            advance_amount: advance,
+          });
+      await fetchBillableItems(false);
+      setSavedBillWasEdit(isEditing);
       setSavedBill(bill);
+      if (isEditing) onEditSaved?.(bill);
       setItems([]);
       setAdvanceStr('');
       setNotes('');
@@ -454,8 +728,8 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
   if (savedBill) {
     return (
       <div className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl max-w-md mx-auto">
-        <p className="text-emerald-400 font-semibold text-lg mb-4">Bill saved</p>
-        <p className="text-red-200/90 text-sm mb-6">Bill #{savedBill.bill_number} has been saved successfully.</p>
+        <p className="text-emerald-400 font-semibold text-lg mb-4">{savedBillWasEdit ? 'Bill updated' : 'Bill saved'}</p>
+        <p className="text-red-200/90 text-sm mb-6">Bill #{savedBill.bill_number} has been {savedBillWasEdit ? 'updated' : 'saved'} successfully.</p>
         <div className="flex gap-3">
           <button
             type="button"
@@ -483,45 +757,98 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
     <form onSubmit={handleSubmit} className="space-y-3">
       {error && <div className="p-2.5 bg-red-950/80 text-red-200 rounded-lg border border-red-900/50 text-sm">{error}</div>}
 
+      {editingBill && (
+        <div className="bg-amber-950/40 border border-amber-700/40 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-amber-100 font-semibold text-sm">Editing {editingBill.bill_number}</p>
+            <p className="text-amber-200/75 text-xs">Change customer details or bill items here, then save changes.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelEdit}
+            className="px-3 py-1.5 bg-black/50 text-amber-100 rounded-lg text-sm border border-amber-800/50 hover:bg-amber-950/60"
+          >
+            Cancel edit
+          </button>
+        </div>
+      )}
+
       <div ref={customerSectionRef} className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-4 shadow-xl">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-red-200/90 mb-1">Customer</label>
-            <div className="flex gap-2 items-center">
-              <div className="flex-1 relative">
+          <div>
+            <label className="block text-sm font-medium text-red-200/90 mb-1">Customer name</label>
+            <div className="relative">
                 <input
                   ref={customerInputRef}
                   type="text"
-                  value={customerSearch || customerName}
+                  value={customerName}
                   onChange={(e) => {
-                    setCustomerSearch(e.target.value);
-                    if (!selectedCustomer) setCustomerName(e.target.value);
+                    const value = e.target.value;
+                    setCustomerName(value);
+                    setActiveCustomerSearchField('name');
+                    setCustomerSearch(value);
                   }}
-                  onFocus={() => setSelectedCustomer(null)}
                   onBlur={() => setTimeout(() => setCustomers([]), 150)}
                   placeholder="Search or enter name"
                   className="w-full border border-red-900/50 rounded-lg px-3 py-1.5 text-sm bg-black/60 text-white placeholder-red-400/50"
                 />
-                {customers.length > 0 && !selectedCustomer && (
-                  <ul className="absolute left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-36 overflow-auto z-10">
+                {customers.length > 0 && !selectedCustomer && activeCustomerSearchField === 'name' && (
+                  <ul className="absolute left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-10">
                     {customers.map((c) => (
                       <li
                         key={c.id}
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => {
-                          setSelectedCustomer(c);
-                          setCustomerName(c.name);
-                          setCustomerSearch('');
-                          setCustomers([]);
-                        }}
+                        onClick={() => selectCustomer(c)}
                         className="px-3 py-2 hover:bg-red-950/50 cursor-pointer text-white text-sm"
                       >
-                        {c.name} {c.phone && `(${c.phone})`}
+                        <span className="font-medium">{c.name}</span>
+                        {c.phone && <span className="ml-2 text-red-300/75">{c.phone}</span>}
                       </li>
                     ))}
                   </ul>
                 )}
-              </div>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-red-200/90 mb-1">Mobile number</label>
+            <div className="relative flex gap-2 items-center">
+              <input
+                type="tel"
+                inputMode="tel"
+                value={customerPhone}
+                onChange={(e) => {
+                  const value = e.target.value.replace(/[^0-9+ -]/g, '');
+                  setCustomerPhone(value);
+                  setActiveCustomerSearchField('phone');
+                  setCustomerSearch(value);
+                }}
+                onBlur={() => setTimeout(() => setCustomers([]), 150)}
+                placeholder="Search or enter mobile"
+                className="w-full border border-red-900/50 rounded-lg px-3 py-1.5 text-sm bg-black/60 text-white placeholder-red-400/50"
+              />
+              {customers.length > 0 && !selectedCustomer && activeCustomerSearchField === 'phone' && (
+                <ul className="absolute left-0 right-0 mt-1 border border-red-900/50 rounded-lg bg-black/95 shadow-lg max-h-44 overflow-auto z-10">
+                  {customers.map((c) => (
+                    <li
+                      key={c.id}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectCustomer(c)}
+                      className="px-3 py-2 hover:bg-red-950/50 cursor-pointer text-white text-sm"
+                    >
+                      <span className="font-medium">{c.phone || 'No phone'}</span>
+                      <span className="ml-2 text-red-300/75">{c.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                type="button"
+                onClick={handleSaveCustomer}
+                disabled={quickAddLoading || !customerName.trim()}
+                className="px-3 py-1.5 bg-red-950/60 rounded-lg hover:bg-red-900/70 text-red-200 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {quickAddLoading ? 'Saving...' : selectedCustomer ? 'Update' : 'Save'}
+              </button>
               <button type="button" onClick={() => setShowQuickAdd(true)} className="px-3 py-1.5 bg-red-950/60 rounded-lg hover:bg-red-900/70 text-red-200 text-sm whitespace-nowrap">
                 Quick Add
               </button>
@@ -550,19 +877,19 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
           ) : billableItemsError ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-red-400">{billableItemsError}</span>
-              <button type="button" onClick={fetchBillableItems} className="px-2 py-1 text-xs bg-red-950/60 text-red-200 rounded hover:bg-red-900/70">
+              <button type="button" onClick={() => fetchBillableItems()} className="px-2 py-1 text-xs bg-red-950/60 text-red-200 rounded hover:bg-red-900/70">
                 Retry
               </button>
             </div>
           ) : billableItems.length === 0 ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-red-300/70">No items. Add materials in Settings and stock in Stock page. Ensure backend is running.</span>
-              <button type="button" onClick={fetchBillableItems} className="px-2 py-1 text-xs bg-red-950/60 text-red-200 rounded hover:bg-red-900/70">
+              <button type="button" onClick={() => fetchBillableItems()} className="px-2 py-1 text-xs bg-red-950/60 text-red-200 rounded hover:bg-red-900/70">
                 Refresh
               </button>
             </div>
           ) : (
-            <button type="button" onClick={fetchBillableItems} className="px-2 py-1 text-xs text-red-400 hover:text-red-300" title="Refresh items">
+            <button type="button" onClick={() => fetchBillableItems()} className="px-2 py-1 text-xs text-red-400 hover:text-red-300" title="Refresh items">
               ↻ Refresh
             </button>
           )}
@@ -615,28 +942,82 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
               <tbody>
                 {items.map((item, idx) => (
                 <tr key={idx} className="hover:bg-red-950/30 border-b border-red-950/40">
-                  <td className="p-2 border border-red-950/40 text-white text-sm">{item.item_name}</td>
+                  <td className="p-2 border border-red-950/40 text-white text-sm">
+                    {editingBill ? (
+                      <input
+                        type="text"
+                        value={item.item_name}
+                        onChange={(e) => updateExistingItem(idx, { item_name: e.target.value })}
+                        className="w-full border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white"
+                      />
+                    ) : (
+                      item.item_name
+                    )}
+                  </td>
                   {showTypeCol && (
                     <td className="p-2 border border-red-950/40 text-red-200/90 text-sm">
                       {String((item.metadata as { stock_type_label?: string })?.stock_type_label || '').trim() || '—'}
                     </td>
                   )}
                   <td className="p-2 border border-red-950/40 text-red-200/90 text-sm">
-                    {item.size || '-'}
+                    {editingBill ? (
+                      <input
+                        type="text"
+                        value={item.size || ''}
+                        onChange={(e) => updateExistingItem(idx, { size: e.target.value })}
+                        className="w-full border border-red-900/50 rounded px-2 py-1 text-sm bg-black/60 text-white"
+                      />
+                    ) : (
+                      item.size || '-'
+                    )}
                   </td>
                   {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && (
                     <td className="p-2 border border-red-950/40 text-right tabular-nums text-red-300/90 text-sm">-</td>
                   )}
-                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">{item.quantity}</td>
                   <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">
-                    {item.service_type === 'manual' &&
-                    (item.metadata as { pricing_unit?: string })?.pricing_unit === 'per_sqft'
-                      ? `Rs.${item.unit_price?.toFixed(2)}/sqft`
-                      : item.service_type === 'manual'
-                        ? `Rs.${item.unit_price?.toFixed(2)}/unit`
-                        : `Rs.${item.unit_price?.toFixed(2)}`}
+                    {editingBill ? (
+                      <EditNumberInput
+                        min={0.01}
+                        step={0.01}
+                        value={item.quantity}
+                        widthClass="w-28"
+                        onValueChange={(value) => updateExistingItem(idx, { quantity: value })}
+                      />
+                    ) : (
+                      item.quantity
+                    )}
                   </td>
-                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-red-300/90 text-sm">{(item.discount || 0) > 0 ? `Rs.${(item.discount || 0).toFixed(2)}` : '-'}</td>
+                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">
+                    {editingBill ? (
+                      <EditNumberInput
+                        min={0}
+                        step={0.01}
+                        value={item.unit_price}
+                        widthClass="w-32"
+                        onValueChange={(value) => updateExistingItem(idx, { unit_price: value })}
+                      />
+                    ) : (
+                      item.service_type === 'manual' &&
+                      (item.metadata as { pricing_unit?: string })?.pricing_unit === 'per_sqft'
+                        ? `Rs.${item.unit_price?.toFixed(2)}/sqft`
+                        : item.service_type === 'manual'
+                          ? `Rs.${item.unit_price?.toFixed(2)}/unit`
+                          : `Rs.${item.unit_price?.toFixed(2)}`
+                    )}
+                  </td>
+                  <td className="p-2 border border-red-950/40 text-right tabular-nums text-red-300/90 text-sm">
+                    {editingBill ? (
+                      <EditNumberInput
+                        min={0}
+                        step={0.01}
+                        value={item.discount || 0}
+                        widthClass="w-28"
+                        onValueChange={(value) => updateExistingItem(idx, { discount: value })}
+                      />
+                    ) : (
+                      (item.discount || 0) > 0 ? `Rs.${(item.discount || 0).toFixed(2)}` : '-'
+                    )}
+                  </td>
                   <td className="p-2 border border-red-950/40 text-right tabular-nums text-white text-sm">Rs.{item.subtotal?.toFixed(2)}</td>
                   <td className="p-2 border border-red-950/40">
                     <button type="button" onClick={() => removeItem(idx)} className="text-red-600 hover:underline text-xs">
@@ -667,19 +1048,35 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                   createPortal(
                     <ul
                       data-bill-dropdown
-                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl max-h-40 overflow-auto z-[9999]"
+                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl max-h-80 overflow-auto z-[9999]"
                       style={{
                         top: itemDropdownRect.bottom + 4,
                         left: itemDropdownRect.left,
-                        width: Math.max(itemDropdownRect.width, 200),
+                        width: Math.max(itemDropdownRect.width, 320),
                       }}
                     >
-                      {filteredItemOptions.length === 0 ? (
+                      <li className="px-2 py-2 border-b border-red-950/60">
+                        <button
+                          type="button"
+                          onClick={startManualItem}
+                          className="w-full text-left px-2 py-2 rounded bg-red-950/40 hover:bg-red-900/60 text-white"
+                        >
+                          <span className="block font-medium">Manual price</span>
+                          <span className="block text-xs text-red-200/75">Type item, size, qty and rate yourself</span>
+                        </button>
+                      </li>
+                      {groupedItemOptions.length === 0 ? (
                         <li className="px-3 py-2 text-red-300/80 text-sm">
                           No matches in settings — type the item name and size above, set qty and price, then Add.
                         </li>
                       ) : (
-                        filteredItemOptions.map((opt) => (
+                        groupedItemOptions.map((optionGroup) => (
+                          <li key={optionGroup.label}>
+                            <div className="px-3 py-1.5 bg-red-950/50 text-red-200 text-xs font-semibold uppercase">
+                              {optionGroup.label}
+                            </div>
+                            <ul>
+                              {optionGroup.options.map((opt) => (
                           <li
                             key={opt.key}
                             onClick={() => {
@@ -716,6 +1113,9 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                             className="px-3 py-2 hover:bg-red-950/50 cursor-pointer text-white"
                           >
                             {opt.display}
+                          </li>
+                              ))}
+                            </ul>
                           </li>
                         ))
                       )}
@@ -839,7 +1239,9 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                       }}
                     >
                       {sizesForItem.map((s) => {
-                        const feetRem = (s as { feetRemaining?: number }).feetRemaining ?? 0;
+                        const remainingSqft = getRemainingRollAvailableSqft(s);
+                        const width = s.widthFt || 0;
+                        const feetRem = width > 0 ? remainingSqft / width : 0;
                         const st = String((s as { stockTypeLabel?: string }).stockTypeLabel || '').trim();
                         return (
                         <li
@@ -853,7 +1255,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                         >
                           <span>
                             {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType)
-                              ? `${s.widthFt ?? 0} ft roll${st ? ` · ${st}` : ''} · ${Math.round(feetRem * 100) / 100} ft on roll`
+                              ? `${s.widthFt ?? 0} ft roll${st ? ` - ${st}` : ''} - ${round2(feetRem)} ft / ${remainingSqft} sqft available`
                               : formatSizeDisplay(s.sizeName) || s.sizeName}{' '}
                             {!isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && '(in)'}
                           </span>
@@ -874,7 +1276,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                 </td>
                 {isBannerOrStickerOrCustomRoll(selectedItem?.type, selectedItem?.calcType) && (
                   <td className="p-1.5 border border-red-950/40 text-right tabular-nums text-emerald-400/90 text-sm">
-                    {selectedSize ? `${Math.round(((selectedSize as { feetRemaining?: number }).feetRemaining ?? 0) * 100) / 100} sqft` : '-'}
+                    {selectedSize ? `${getRemainingRollAvailableSqft(selectedSize)} sqft` : '-'}
                   </td>
                 )}
                 <td className="p-1.5 border border-red-950/40 text-right">
@@ -1000,6 +1402,13 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
                         return q <= 0 || up <= 0 || currentSubtotal <= 0;
                       }
                       if (!selectedItem || !selectedSize || !quantity) return true;
+                      if (
+                        selectedItem.calcType === 'sqft_direct' &&
+                        isBannerOrStickerOrCustomRoll(selectedItem.type, selectedItem.calcType) &&
+                        q > getRemainingRollAvailableSqft(selectedSize)
+                      ) {
+                        return true;
+                      }
                       if (selectedItem.calcType === 'sqft_direct' ? parseFloat(quantity) < 0.01 : parseInt(quantity, 10) < 1) return true;
                       return currentSubtotal <= 0;
                     })()}
@@ -1042,7 +1451,7 @@ export default function BillForm({ onBillCreated }: BillFormProps) {
           </div>
           <div className="mt-4 flex justify-end">
             <button type="submit" disabled={loading} className="px-6 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {loading ? 'Saving...' : 'Save Bill'}
+              {loading ? 'Saving...' : editingBill ? 'Save Changes' : 'Save Bill'}
             </button>
           </div>
         </div>

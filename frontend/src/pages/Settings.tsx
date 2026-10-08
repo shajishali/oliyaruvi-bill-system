@@ -31,6 +31,7 @@ function loadManualPriceCategories(): ManualPriceCategory[] {
 
 const ACTION_LABELS: Record<string, string> = {
   bill_created: 'Bill Created',
+  bill_edited: 'Bill Edited',
   bill_balance_paid: 'Balance Paid',
   frame_created: 'Frame Added',
   photocopy_created: 'Photocopy Size Added',
@@ -56,6 +57,9 @@ function formatActivityDetails(a: ActivityLogEntry): string {
   if (d.bill_number) parts.push(`#${d.bill_number}`);
   if (d.customer_name) parts.push(String(d.customer_name));
   if (d.total != null) parts.push(`Rs.${Number(d.total).toFixed(2)}`);
+  if (d.old_total != null && d.new_total != null) {
+    parts.push(`Rs.${Number(d.old_total).toFixed(2)} to Rs.${Number(d.new_total).toFixed(2)}`);
+  }
   if (d.size_name) parts.push(formatSizeDisplay(String(d.size_name)) || String(d.size_name));
   if (d.transaction_type) parts.push(String(d.transaction_type));
   if (d.quantity != null) parts.push(`qty:${d.quantity}`);

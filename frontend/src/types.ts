@@ -11,6 +11,7 @@ export interface Bill {
   bill_date: string;
   customer_id: number | null;
   customer_name: string;
+  customer_phone?: string | null;
   total: number;
   discount: number;
   amount_paid?: number;
@@ -21,12 +22,16 @@ export interface Bill {
 }
 
 export interface BillItem {
+  id?: number;
+  service_type?: string;
   item_name: string;
   size?: string;
   quantity: number;
   unit_price: number;
   discount?: number;
+  item_discount?: number;
   subtotal: number;
+  metadata?: string | Record<string, unknown> | null;
 }
 
 export interface Customer {
@@ -38,6 +43,8 @@ export interface Customer {
 export interface BillableItem {
   type: string;
   name: string;
+  groupLabel?: string;
+  itemTypeLabel?: string;
   /** Primary product/subitem label for the bill "Item" column (material, service, stamp, etc.) */
   itemLabel?: string;
   sizeName: string;

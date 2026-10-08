@@ -1,6 +1,6 @@
 {
   "name": "oliyaruvi-printers",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Oliyaruvi Printers - Billing System",
   "main": "electron/main.js",
   "scripts": {
@@ -41,9 +41,12 @@
       "electron/**/*",
       "backend/**/*",
       "!backend/.env",
+      "!**/*.db",
+      "!**/*.db-*",
+      "!**/*.sqlite",
+      "!**/*.sqlite3",
       "frontend/dist/**/*",
-      "frontend/public/**/*",
-      "database/seed.sql"
+      "frontend/public/**/*"
     ],
     "asarUnpack": [
       "backend/**/*",

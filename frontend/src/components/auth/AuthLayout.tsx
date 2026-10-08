@@ -13,13 +13,13 @@ export default function AuthLayout() {
           filter: 'brightness(1.25)',
         }}
       />
-      <AnimatePresence mode="wait" initial={false}>
+      <AnimatePresence initial={false}>
         <motion.div
           key={location.pathname}
-          initial={{ opacity: 0, scale: 0.95 }}
+          initial={{ opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.98 }}
-          transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
+          exit={{ opacity: 0, scale: 0.99 }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
           className="relative z-10 w-full max-w-md px-4"
         >
           <Outlet />

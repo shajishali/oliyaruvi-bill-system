@@ -436,6 +436,8 @@ router.get('/billable-items', (req, res) => {
         const base = {
           type: 'banner_roll',
           name: `Banner ${bm.material_name}`,
+          groupLabel: 'Banner',
+          itemTypeLabel: stockTypeLabel || printTypeLabel || 'Banner',
           itemLabel: String(bm.material_name || '').trim(),
           sizeName: br.size_name,
           sizeId: br.id,
@@ -481,6 +483,8 @@ router.get('/billable-items', (req, res) => {
         items.push({
           type: 'sticker_roll',
           name: `Sticker ${sm.material_name}`,
+          groupLabel: 'Sticker',
+          itemTypeLabel: stockTypeLabel || 'Sticker',
           sizeName: sr.size_name,
           sizeId: sr.id,
           materialId: sm.id,
@@ -499,6 +503,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'banner',
         name: `Banner ${bs.material_name} (size)`,
+        groupLabel: 'Banner',
+        itemTypeLabel: 'Banner',
         itemLabel: String(bs.material_name || '').trim(),
         sizeName: bs.size_name,
         sizeId: bs.id,
@@ -518,6 +524,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'service',
         name: bm.material_name,
+        groupLabel: 'Banner',
+        itemTypeLabel: 'Banner',
         itemLabel: String(bm.material_name || '').trim(),
         sizeName: 'Unit',
         sizeId: bm.id,
@@ -530,6 +538,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'designforBanner',
         name: 'Design for Banner',
+        groupLabel: 'Design for Banner',
+        itemTypeLabel: 'Design for Banner',
         itemLabel: `Design for Banner ${String(d.size_name || '').trim()}`.trim(),
         sizeName: d.size_name,
         sizeId: d.id,
@@ -541,6 +551,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'designforPhoto',
         name: 'Design for Photo',
+        groupLabel: 'Design for Photo',
+        itemTypeLabel: 'Design for Photo',
         itemLabel: `Design for Photo ${String(d.size_name || '').trim()}`.trim(),
         sizeName: d.size_name,
         sizeId: d.id,
@@ -562,6 +574,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'frame',
         name: 'Frame',
+        groupLabel: 'Frames',
+        itemTypeLabel: ft,
         itemLabel,
         sizeName: sizeLabel,
         sizeId: f.id,
@@ -577,6 +591,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'photocopy',
         name: 'Photocopy',
+        groupLabel: 'Photocopy',
+        itemTypeLabel: 'Photocopy',
         itemLabel: sn || 'Photocopy',
         sizeName: p.size_name,
         sizeId: p.id,
@@ -597,6 +613,8 @@ router.get('/billable-items', (req, res) => {
       items.push({
         type: 'service_item',
         name: si.name,
+        groupLabel: String(si.item_type || '').trim() || 'Services (no stock)',
+        itemTypeLabel: String(si.item_type || '').trim() || 'Services (no stock)',
         itemLabel: String(si.name || '').trim(),
         sizeName: isPerSqft ? 'Per sqft' : 'Unit',
         sizeId: si.id,
@@ -652,6 +670,8 @@ router.get('/billable-items', (req, res) => {
             items.push({
               type: 'custom',
               name: sale.item_name,
+              groupLabel: sec.label || sectionId,
+              itemTypeLabel: String(sale.item_type || '').trim() || sec.label || sectionId,
               itemLabel: String(sale.item_name || '').trim(),
               sizeName: cs.size_name,
               sizeId: cs.id,
@@ -693,6 +713,8 @@ router.get('/billable-items', (req, res) => {
             items.push({
               type: 'custom',
               name: sec.label,
+              groupLabel: sec.label || sectionId,
+              itemTypeLabel: String(sale.item_type || '').trim() || sec.label || sectionId,
               itemLabel: sizeLabel,
               sizeName: sizeLabel,
               sizeId: sale.id,
@@ -712,6 +734,8 @@ router.get('/billable-items', (req, res) => {
             items.push({
               type: 'custom',
               name: sec.label,
+              groupLabel: sec.label || cs.section_id,
+              itemTypeLabel: typePart || sec.label || cs.section_id,
               itemLabel,
               sizeName: cs.size_name,
               sizeId: cs.id,

@@ -22,6 +22,7 @@ if (!fs.existsSync(dbDir)) {
 }
 
 const db = new Database(dbPath);
+const isNewDatabase = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'").get();
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
@@ -93,16 +94,14 @@ function ensureBannerStickerStockTypeColumns() {
   }
 }
 
-// Run seed (only if shop_settings is empty)
+// Seed only a new database. Reopening before registration must not reset defaults.
 function runSeed() {
+  if (!isNewDatabase) return;
   const seedPath = path.join(seedDir, 'seed.sql');
   if (!fs.existsSync(seedPath)) return;
 
-  const existing = db.prepare('SELECT COUNT(*) as count FROM shop_settings').get();
-  if (existing.count > 0) return; // Already seeded
-
   const sql = fs.readFileSync(seedPath, 'utf8');
-  db.exec(sql);
+  db.transaction(() => db.exec(sql))();
 }
 
 // Remove any legacy default frame stock rows (added by old migrations).
@@ -203,8 +202,8 @@ runMigrations();
 ensureBannerStickerStockTypeColumns();
 ensureBannerPrintTypeColumn();
 ensureBannerStockPriceColumns();
-runSeed();
 removeLegacyDefaultFrameRows();
 stripDefaultBannerDataIfNotConfigured();
+runSeed();
 
 module.exports = db;

@@ -7,7 +7,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { Resend } = require('resend');
 
 const key = (process.env.RESEND_KEY || process.env.RESEND_API_KEY || '').trim();
-const testEmail = process.env.RESET_EMAIL || 'oliyaruviprinters@gmail.com';
+const testEmail = process.env.RESET_EMAIL || '';
 
 if (!key) {
   console.error('❌ No RESEND_KEY or RESEND_API_KEY in .env');

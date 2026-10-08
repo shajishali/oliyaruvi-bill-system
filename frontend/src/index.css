@@ -19,6 +19,10 @@ button:disabled, [role="button"][aria-disabled="true"] {
   --theme-dark-hover: #1a0a0a; /* red-tinted black */
 }
 
+html {
+  font-size: 17px;
+}
+
 select option {
   background: #0a0a0a;
   color: #fff;
@@ -26,8 +30,23 @@ select option {
 
 body {
   @apply text-gray-900 antialiased;
-  background: url('/dashboard-bg.png') center center / cover no-repeat fixed;
+  background: url('/dashboard-bg.png') center center / cover no-repeat;
   min-height: 100vh;
+}
+
+.backdrop-blur-sm,
+.backdrop-blur-md {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.bill-edit-number-input {
+  padding-left: 0.5rem;
+  padding-right: 0.45rem;
+}
+
+.bill-edit-number-input::-webkit-inner-spin-button {
+  margin-left: 0.55rem;
 }
 
 @media print {

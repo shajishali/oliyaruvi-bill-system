@@ -1,5 +1,5 @@
 const API_BASE = (typeof window !== 'undefined' && window.location?.protocol === 'file:')
-  ? 'http://localhost:5000/api'
+  ? `http://127.0.0.1:${new URLSearchParams(window.location.search).get('apiPort')}/api`
   : '/api';
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -21,8 +21,10 @@ export const api = {
       request<import('../types').Bill[]>(`/bills${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`),
     get: (id: number) => request<import('../types').Bill>(`/bills/${id}`),
     delete: (id: number) => request<{ success: boolean }>(`/bills/${id}`, { method: 'DELETE' }),
-    create: (data: { customer_id?: number | null; customer_name: string; items: import('../types').BillItem[]; discount: number; payment_method: string; notes?: string | null; advance_amount?: number }) =>
+    create: (data: { customer_id?: number | null; customer_name: string; customer_phone?: string | null; items: import('../types').BillItem[]; discount: number; payment_method: string; notes?: string | null; advance_amount?: number }) =>
       request<import('../types').Bill>('/bills', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: { customer_id?: number | null; customer_name: string; customer_phone?: string | null; items: import('../types').BillItem[]; discount?: number; payment_method: string; notes?: string | null }) =>
+      request<import('../types').Bill>(`/bills/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     payBalance: (id: number, amount: number, payment_method?: 'Cash' | 'Bank') =>
       request<import('../types').Bill>(`/bills/${id}/pay-balance`, { method: 'PUT', body: JSON.stringify({ amount, payment_method }) }),
   },
@@ -31,6 +33,8 @@ export const api = {
     search: (q: string) => request<import('../types').Customer[]>(`/customers/search?q=${encodeURIComponent(q)}`),
     create: (data: { name: string; phone?: string | null }) =>
       request<import('../types').Customer>('/customers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: { name?: string; phone?: string | null }) =>
+      request<import('../types').Customer>(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   },
   stock: {
     frames: () => request<unknown[]>('/stock/frames'),

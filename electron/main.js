@@ -1,9 +1,9 @@
 const { app, BrowserWindow, Menu, session, dialog } = require('electron');
 const path = require('path');
-const http = require('http');
 const fs = require('fs');
 
 let mainWindow;
+let backendPort;
 
 // Prevent multiple instances (avoids port conflicts / duplicate backend)
 const gotLock = app.requestSingleInstanceLock();
@@ -84,7 +84,7 @@ function createWindow() {
     const fileToLoad = fs.existsSync(indexPath) ? indexPath : path.join(__dirname, '../frontend/dist/index.html');
     // HashRouter needs #/ for root route when loading from file://
     const fileUrl = 'file:///' + fileToLoad.replace(/\\/g, '/').replace(/^\/+/, '');
-    mainWindow.loadURL(fileUrl + '#/');
+    mainWindow.loadURL(fileUrl + '?apiPort=' + backendPort + '#/');
   } else {
     mainWindow.loadURL('http://localhost:3000');
   }
@@ -100,61 +100,41 @@ function createWindow() {
   });
 }
 
-function waitForBackend(port, maxAttempts = 30) {
-  return new Promise((resolve) => {
-    let attempts = 0;
-    const tryConnect = () => {
-      const req = http.get(`http://localhost:${port}/api/health`, (res) => {
-        resolve(true);
-      });
-      req.on('error', () => {
-        attempts++;
-        if (attempts < maxAttempts) {
-          setTimeout(tryConnect, 500);
-        } else {
-          resolve(false);
-        }
-      });
-      req.setTimeout(2000, () => { req.destroy(); });
-    };
-    tryConnect();
-  });
-}
-
-function startBackend() {
-  process.env.PORT = '5000';
+async function startBackend() {
+  process.env.PORT = '0';
   process.env.ELECTRON_APP = 'true';
   const userDataPath = app.getPath('userData');
-  const dbFileName = `oliyaruvi_${app.getVersion()}.db`;
+  const dbFileName = 'oliyaruvi_clean.db';
   process.env.DATABASE_PATH = path.join(userDataPath, dbFileName);
   // Resolve frontend path: unpacked files are in app.asar.unpacked (sibling of app.asar)
   const appPath = app.getAppPath();
   const resourcesDir = path.dirname(appPath);
   process.env.FRONTEND_DIST = path.join(resourcesDir, 'app.asar.unpacked', 'frontend', 'dist');
-  try {
-    require('../backend/server.js');
-  } catch (err) {
-    console.error('Backend failed to start:', err);
-  }
+  const server = require('../backend/server.js');
+  await new Promise((resolve, reject) => {
+    if (server.listening) return resolve();
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  backendPort = server.address().port;
 }
 
 app.whenReady().then(async () => {
   if (app.isPackaged) {
     // If this is a fresh install (no DB yet), clear old localStorage so Register shows
-    const dbPath = path.join(app.getPath('userData'), `oliyaruvi_${app.getVersion()}.db`);
+    const dbPath = path.join(app.getPath('userData'), 'oliyaruvi_clean.db');
     const isFreshInstall = !fs.existsSync(dbPath);
     if (isFreshInstall) {
       await clearAuthStorage();
     }
 
-    // If backend is already running on 5000 (e.g., app reopened / dev server), reuse it.
-    const alreadyRunning = await waitForBackend(5000, 2);
-    if (!alreadyRunning) {
-      startBackend();
-    }
-    const ready = await waitForBackend(5000);
-    if (!ready) {
-      console.error('Backend did not start in time');
+    // Always own the backend; never reuse a development or older installation server.
+    try {
+      await startBackend();
+    } catch (err) {
+      dialog.showErrorBox('Unable to start', String(err.message || err));
+      app.quit();
+      return;
     }
   }
   createWindow();

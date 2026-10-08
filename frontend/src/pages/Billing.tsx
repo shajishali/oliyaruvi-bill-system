@@ -8,6 +8,7 @@ import type { Bill } from '../types';
 export default function Billing() {
   const [activeTab, setActiveTab] = useState('new');
   const [printBill, setPrintBill] = useState<Bill | null>(null);
+  const [editingBill, setEditingBill] = useState<Bill | null>(null);
 
   return (
     <>
@@ -15,7 +16,10 @@ export default function Billing() {
       <div className="p-4 pb-6">
         <div className="flex gap-2 mb-4">
           <button
-            onClick={() => setActiveTab('new')}
+            onClick={() => {
+              setEditingBill(null);
+              setActiveTab('new');
+            }}
             className={`px-4 py-2 rounded-lg font-medium ${
               activeTab === 'new' ? 'bg-red-600 text-white' : 'bg-black/60 text-red-200/90 hover:bg-red-950/60'
             }`}
@@ -23,7 +27,10 @@ export default function Billing() {
             New Bill
           </button>
           <button
-            onClick={() => setActiveTab('list')}
+            onClick={() => {
+              setEditingBill(null);
+              setActiveTab('list');
+            }}
             className={`px-4 py-2 rounded-lg font-medium ${
               activeTab === 'list' ? 'bg-red-600 text-white' : 'bg-black/60 text-red-200/90 hover:bg-red-950/60'
             }`}
@@ -33,10 +40,24 @@ export default function Billing() {
         </div>
 
         {activeTab === 'new' && (
-          <BillForm onBillCreated={(bill) => setPrintBill(bill)} />
+          <BillForm
+            onBillCreated={(bill) => setPrintBill(bill)}
+            editingBill={editingBill}
+            onEditSaved={() => setEditingBill(null)}
+            onCancelEdit={() => {
+              setEditingBill(null);
+              setActiveTab('list');
+            }}
+          />
         )}
         {activeTab === 'list' && (
-          <BillList onPrint={(bill) => setPrintBill(bill)} />
+          <BillList
+            onPrint={(bill) => setPrintBill(bill)}
+            onEdit={(bill) => {
+              setEditingBill(bill);
+              setActiveTab('new');
+            }}
+          />
         )}
 
         {printBill && (

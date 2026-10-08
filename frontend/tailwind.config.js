@@ -16,7 +16,7 @@ export default {
         },
       },
       animation: {
-        'page-fade': 'page-fade 2s ease-out',
+        'page-fade': 'page-fade 180ms ease-out',
       },
     },
   },

@@ -5,12 +5,14 @@ import PayBalanceModal from './PayBalanceModal';
 
 interface BillListProps {
   onPrint: (bill: Bill) => void;
+  onEdit?: (bill: Bill) => void;
   onBillUpdated?: () => void;
 }
 
 interface SearchState {
   number: string;
   customer: string;
+  phone: string;
   from: string;
   to: string;
   pending_settlement: string;
@@ -24,22 +26,24 @@ function getPaymentStatus(b: Bill): 'paid' | 'partial' | 'pending' {
   return 'pending';
 }
 
-export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
+export default function BillList({ onPrint, onEdit, onBillUpdated }: BillListProps) {
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [viewingBillId, setViewingBillId] = useState<number | null>(null);
+  const [loadingEditId, setLoadingEditId] = useState<number | null>(null);
   const [payBalanceBill, setPayBalanceBill] = useState<Bill | null>(null);
   const [markingPaidIds, setMarkingPaidIds] = useState<Set<number>>(new Set());
   const [markingAllPaid, setMarkingAllPaid] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
-  const [search, setSearch] = useState<SearchState>({ number: '', customer: '', from: '', to: '', pending_settlement: '' });
+  const [search, setSearch] = useState<SearchState>({ number: '', customer: '', phone: '', from: '', to: '', pending_settlement: '' });
 
   const fetchBills = () => {
     setLoading(true);
     const params: Record<string, string> = {};
     if (search.number) params.number = search.number;
     if (search.customer) params.customer = search.customer;
+    if (search.phone) params.phone = search.phone;
     if (search.from) params.from = search.from;
     if (search.to) params.to = search.to;
     if (search.pending_settlement === '1') params.pending_settlement = 'true';
@@ -59,6 +63,7 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
     const params: Record<string, string> = {};
     if (search.number) params.number = search.number;
     if (search.customer) params.customer = search.customer;
+    if (search.phone) params.phone = search.phone;
     if (search.from) params.from = search.from;
     if (search.to) params.to = search.to;
     if (search.pending_settlement === '1') params.pending_settlement = 'true';
@@ -73,6 +78,17 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
       onPrint(bill);
     } finally {
       setViewingBillId(null);
+    }
+  };
+
+  const editBill = async (id: number) => {
+    if (loadingEditId) return;
+    setLoadingEditId(id);
+    try {
+      const bill = await api.bills.get(id);
+      onEdit?.(bill);
+    } finally {
+      setLoadingEditId(null);
     }
   };
 
@@ -114,6 +130,7 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
       const params: Record<string, string> = {};
       if (search.number) params.number = search.number;
       if (search.customer) params.customer = search.customer;
+      if (search.phone) params.phone = search.phone;
       if (search.from) params.from = search.from;
       if (search.to) params.to = search.to;
       if (search.pending_settlement === '1') params.pending_settlement = 'true';
@@ -170,6 +187,14 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
           className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
         />
         <input
+          type="tel"
+          inputMode="tel"
+          placeholder="Mobile number"
+          value={search.phone}
+          onChange={(e) => setSearch((s) => ({ ...s, phone: e.target.value.replace(/[^0-9+ -]/g, '') }))}
+          className="border border-red-900/50 rounded px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+        />
+        <input
           type="date"
           placeholder="From"
           value={search.from}
@@ -207,6 +232,7 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
               <th className="text-left p-2 border border-red-950/50 text-red-200">Bill #</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">Date</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">Customer</th>
+              <th className="text-left p-2 border border-red-950/50 text-red-200">Mobile</th>
               <th className="text-right p-2 border border-red-950/50 text-red-200">Total</th>
               <th className="text-left p-2 border border-red-950/50 text-red-200">
                 Status
@@ -227,6 +253,7 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
                 <td className="p-2 border border-red-950/40 text-white">{b.bill_number}</td>
                 <td className="p-2 border border-red-950/40 text-red-200/90">{b.bill_date}</td>
                 <td className="p-2 border border-red-950/40 text-white">{b.customer_name}</td>
+                <td className="p-2 border border-red-950/40 text-red-200/90">{b.customer_phone || '-'}</td>
                 <td className="p-2 border border-red-950/40 text-right text-white">Rs.{total.toFixed(2)}</td>
                 <td className="p-2 border border-red-950/40">
                   {status === 'paid' && <span className="text-emerald-400 text-sm">Paid</span>}
@@ -253,6 +280,14 @@ export default function BillList({ onPrint, onBillUpdated }: BillListProps) {
                       className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {viewingBillId === b.id ? 'Loading...' : 'View / Print'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => editBill(b.id)}
+                      disabled={loadingEditId === b.id}
+                      className="px-3 py-1 bg-red-950/60 text-red-200 rounded text-sm hover:bg-red-900/70 disabled:opacity-50 disabled:cursor-not-allowed border border-red-900/50"
+                    >
+                      {loadingEditId === b.id ? 'Loading...' : 'Edit'}
                     </button>
                     <button
                       type="button"
