@@ -106,16 +106,21 @@ router.put('/branch-name', (req, res) => {
 
 router.put('/', (req, res) => {
   try {
-    const { shop_name, address, contact, gstin, smtp_host, smtp_port, smtp_user, smtp_password, report_receiver_email } = req.body;
+    const {
+      shop_name, address, contact, gstin,
+      smtp_host, smtp_port, smtp_user, smtp_password, report_receiver_email,
+      auth_smtp_host, auth_smtp_port, auth_smtp_user, auth_smtp_password,
+    } = req.body;
 
     // Upsert so it works on a brand-new/empty DB.
     db.prepare(`
       INSERT INTO shop_settings (
         id, shop_name, address, contact, gstin,
         smtp_host, smtp_port, smtp_user, smtp_password, report_receiver_email,
+        auth_smtp_host, auth_smtp_port, auth_smtp_user, auth_smtp_password,
         updated_at
       )
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
         shop_name = COALESCE(excluded.shop_name, shop_settings.shop_name),
         address = COALESCE(excluded.address, shop_settings.address),
@@ -126,6 +131,10 @@ router.put('/', (req, res) => {
         smtp_user = COALESCE(excluded.smtp_user, shop_settings.smtp_user),
         smtp_password = COALESCE(excluded.smtp_password, shop_settings.smtp_password),
         report_receiver_email = COALESCE(excluded.report_receiver_email, shop_settings.report_receiver_email),
+        auth_smtp_host = COALESCE(excluded.auth_smtp_host, shop_settings.auth_smtp_host),
+        auth_smtp_port = COALESCE(excluded.auth_smtp_port, shop_settings.auth_smtp_port),
+        auth_smtp_user = COALESCE(excluded.auth_smtp_user, shop_settings.auth_smtp_user),
+        auth_smtp_password = COALESCE(excluded.auth_smtp_password, shop_settings.auth_smtp_password),
         updated_at = CURRENT_TIMESTAMP
     `).run(
       shop_name ?? '',
@@ -136,7 +145,11 @@ router.put('/', (req, res) => {
       smtp_port ?? '587',
       smtp_user ?? '',
       smtp_password ?? '',
-      report_receiver_email ?? ''
+      report_receiver_email ?? '',
+      auth_smtp_host ?? 'smtp.gmail.com',
+      auth_smtp_port ?? '587',
+      auth_smtp_user ?? '',
+      auth_smtp_password ?? ''
     );
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'branch_name')) {
@@ -185,7 +198,7 @@ router.post('/send-report', async (req, res) => {
       from: `"${shop}" <${user}>`,
       to,
       subject: `${shop} weekly report ${period}`,
-      text: `The weekly report for ${period} is attached. It includes stock, sales, and profit.`,
+      text: `The weekly report for ${period} is attached. It covers bills, stock, prices, expenses, suppliers, salary, counter duty, transfers, and profit.`,
       attachments: [{ filename, content: buffer, contentType: 'application/pdf' }],
     };
     const attempts = [port === 465 ? 465 : 587, port === 465 ? 587 : 465];

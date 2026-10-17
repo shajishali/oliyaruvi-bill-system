@@ -20,3 +20,28 @@ export function getAdminPassword(): string {
 export function setAdminPassword(password: string) {
   localStorage.setItem(ADMIN_PASSWORD_KEY, password);
 }
+
+export function markAdminSession() {
+  try {
+    sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearAdminSession() {
+  try {
+    sessionStorage.removeItem(ADMIN_AUTH_KEY);
+    sessionStorage.removeItem('admin_authenticated_at');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isAdminSessionActive(): boolean {
+  try {
+    return sessionStorage.getItem(ADMIN_AUTH_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}

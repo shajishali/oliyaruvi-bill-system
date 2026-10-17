@@ -41,9 +41,20 @@ const ACTION_LABELS: Record<string, string> = {
   salary_paid: 'Salary Paid',
   salary_deleted: 'Salary Payment Removed',
   counter_started: 'Counter Started',
+  counter_confirmed: 'Counter Confirmed',
   counter_ended: 'Counter Ended',
   counter_staff_added: 'Counter Person Added',
   counter_staff_removed: 'Counter Person Removed',
+  supplier_created: 'Supplier Company Added',
+  supplier_updated: 'Supplier Company Updated',
+  supplier_deleted: 'Supplier Company Removed',
+  supplier_bill_created: 'Supplier Bill Added',
+  supplier_bill_updated: 'Supplier Bill Updated',
+  supplier_bill_deleted: 'Supplier Bill Removed',
+  supplier_bill_payment: 'Supplier Bill Payment',
+  supplier_bill_attachment: 'Supplier Bill Attachment',
+  expense_added: 'Expense Added',
+  settings_updated: 'Settings Updated',
 };
 
 function money(value: number) {
@@ -115,6 +126,10 @@ function reportDetail(entry: ActivityLogEntry): string {
   if (details.project_name) bits.push(String(details.project_name));
   if (details.pay_kind) bits.push(String(details.pay_kind));
   if (details.pay_month) bits.push(String(details.pay_month));
+  if (details.supplier_name) bits.push(String(details.supplier_name));
+  if (details.from_collection === true) bits.push('from day collection');
+  if (details.shop_name) bits.push(`shop ${details.shop_name}`);
+  if (details.branch_name) bits.push(`branch ${details.branch_name}`);
   if (details.rows_removed != null) bits.push(`${details.rows_removed} rows`);
   if (details.updates && typeof details.updates === 'object') {
     const updates = details.updates as Record<string, unknown>;
@@ -189,10 +204,12 @@ export function downloadShopReport(doc: jsPDF, from: string, to: string) {
 }
 
 export async function buildShopReport(from: string, to: string) {
-  const [report, expenses, bills, activities, framePrices, frames, photos, photocopy, banners, stickers, custom] = await Promise.all([
+  const [settings, report, expenses, bills, supplierBills, activities, framePrices, frames, photos, photocopy, banners, stickers, custom] = await Promise.all([
+    api.settings.get(),
     api.reports.finalRevenue({ period: 'weekly', from, to }),
     api.expenses.list({ from, to }),
     api.bills.list({ from, to }),
+    api.suppliers.bills({ from, to }),
     api.reports.activity({ from, to, limit: '2000' }),
     api.services.framePricing() as Promise<Record<string, unknown>[]>,
     api.stock.frames() as Promise<Record<string, unknown>[]>,
@@ -202,6 +219,7 @@ export async function buildShopReport(from: string, to: string) {
     api.stock.stickers() as Promise<Record<string, unknown>[]>,
     api.stock.customItems() as Promise<Record<string, unknown>[]>,
   ]);
+  const shopTitle = (settings.shop_name || '').trim() || 'OLIYARUVI PRINTERS';
 
   const ofType = (...types: string[]) => activities.filter((entry) => types.includes(entry.action_type));
   const deletedBills = ofType('bill_deleted');
@@ -215,15 +233,23 @@ export async function buildShopReport(from: string, to: string) {
   const priceChanges = ofType('price_added', 'price_changed', 'price_removed');
   const transfers = ofType('branch_transfer', 'branch_transfer_edited', 'branch_transfer_undone', 'branch_created', 'branch_deleted');
   const salary = ofType('salary_paid', 'salary_deleted', 'salary_person_added', 'salary_person_removed');
-  const counter = ofType('counter_started', 'counter_ended', 'counter_staff_added', 'counter_staff_removed');
-  const expenseChanges = ofType('expense_updated', 'expense_deleted');
+  const counter = ofType('counter_started', 'counter_confirmed', 'counter_ended', 'counter_staff_added', 'counter_staff_removed');
+  const expenseChanges = ofType('expense_updated', 'expense_deleted', 'expense_added');
+  const suppliers = ofType(
+    'supplier_created', 'supplier_updated', 'supplier_deleted',
+    'supplier_bill_created', 'supplier_bill_updated', 'supplier_bill_deleted',
+    'supplier_bill_payment', 'supplier_bill_attachment'
+  );
+  const settingsChanges = ofType('settings_updated');
   const used = new Set([
     ...deletedBills, ...balancePayments, ...editedBills, ...newStock, ...stockChanges, ...priceChanges,
-    ...transfers, ...salary, ...counter, ...expenseChanges,
+    ...transfers, ...salary, ...counter, ...expenseChanges, ...suppliers, ...settingsChanges,
   ].map((entry) => entry.id));
-  const skipped = new Set(['user_login', 'user_registered', 'password_changed', 'settings_updated', 'bill_created', 'expense_added']);
+  const skipped = new Set(['user_login', 'user_registered', 'password_changed', 'bill_created']);
   const other = activities.filter((entry) => !used.has(entry.id) && !skipped.has(entry.action_type));
   const balanceTotal = balancePayments.reduce((sum, entry) => sum + Number((entry.details || {}).amount || 0), 0);
+  const supplierPaid = supplierBills.reduce((sum, bill) => sum + Number(bill.amount_paid || 0), 0);
+  const supplierBalance = supplierBills.reduce((sum, bill) => sum + Math.max(0, Number(bill.total || 0) - Number(bill.amount_paid || 0)), 0);
   const pending = bills.reduce((sum, bill) => sum + Math.max(0, Number(bill.total || 0) - Number(bill.amount_paid || 0)), 0);
   const pricesOnFile = framePrices
     .filter((row) => inRange(row.updated_at, from, to))
@@ -255,7 +281,7 @@ export async function buildShopReport(from: string, to: string) {
   };
 
   doc.setFontSize(16);
-  doc.text('OLIYARUVI PRINTERS', 14, 16);
+  doc.text(shopTitle, 14, 16);
   doc.setFontSize(12);
   doc.text('Shop report', 14, 24);
   doc.setFontSize(10);
@@ -264,16 +290,16 @@ export async function buildShopReport(from: string, to: string) {
 
   autoTable(doc, {
     startY: 42,
-    head: [['Bills', 'Deleted', 'Balance paid', 'New stock', 'Price changes', 'Income', 'Expenses', 'Profit']],
+    head: [['Sales bills', 'Supplier bills', 'Balance in', 'Supplier paid', 'Expenses', 'Income', 'Profit', 'Counter events']],
     body: [[
       String(bills.length),
-      String(deletedBills.length),
+      String(supplierBills.length),
       money(balanceTotal),
-      String(newStock.length),
-      String(priceChanges.length + pricesOnFile.length),
-      money(report.income),
+      money(supplierPaid),
       money(report.outcome),
+      money(report.income),
       money(report.finalRevenue),
+      String(counter.length),
     ]],
     theme: 'grid',
     styles: { fontSize: 7 },
@@ -296,14 +322,32 @@ export async function buildShopReport(from: string, to: string) {
   paint('Stock changes and removals', ['When', 'What', 'Details'], activityRows(stockChanges));
   paint('Price changes', ['When', 'What', 'Details'], [...activityRows(priceChanges), ...pricesOnFile]);
   paint(
-    'Expenses',
+    'Expenses (day book / money box)',
     ['Date', 'Amount', 'Description'],
     expenses.map((expense) => [expense.expense_date, money(expense.amount), expense.description || ''])
   );
-  paint('Expense edits and deletions', ['When', 'What', 'Details'], activityRows(expenseChanges));
+  paint('Expense activity log', ['When', 'What', 'Details'], activityRows(expenseChanges));
+  paint(
+    `Supplier purchase bills · unpaid ${money(supplierBalance)}`,
+    ['Date', 'Bill', 'Company', 'Total', 'Paid', 'Balance'],
+    supplierBills.map((bill) => {
+      const total = Number(bill.total || 0);
+      const paid = Number(bill.amount_paid || 0);
+      return [
+        bill.bill_date,
+        bill.bill_number,
+        bill.supplier_name || '',
+        money(total),
+        money(paid),
+        money(Math.max(0, total - paid)),
+      ];
+    })
+  );
+  paint('Supplier changes & payments', ['When', 'What', 'Details'], activityRows(suppliers));
   paint('Branch transfers', ['When', 'What', 'Details'], activityRows(transfers));
   paint('Salary', ['When', 'What', 'Details'], activityRows(salary));
-  paint('Counter', ['When', 'What', 'Details'], activityRows(counter));
+  paint('Counter duty', ['When', 'What', 'Details'], activityRows(counter));
+  paint('Shop settings changes', ['When', 'What', 'Details'], activityRows(settingsChanges));
   paint('Other changes', ['When', 'What', 'Details'], activityRows(other));
 
   const stockRows = [

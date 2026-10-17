@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 import Header from '../components/layout/Header';
 import AdminGate from '../components/settings/AdminGate';
 import SalaryManagement from '../components/settings/SalaryManagement';
-import { ADMIN_AUTH_KEY, setAdminPassword } from '../constants/adminAuth';
+import { clearAdminSession, setAdminPassword } from '../constants/adminAuth';
 import { api } from '../api/client';
 
 export default function Salary() {
@@ -12,7 +12,7 @@ export default function Salary() {
   const [passwordError, setPasswordError] = useState('');
 
   const handleAdminLogout = () => {
-    sessionStorage.removeItem(ADMIN_AUTH_KEY);
+    clearAdminSession();
     window.location.reload();
   };
 
@@ -38,7 +38,7 @@ export default function Salary() {
   return (
     <AdminGate>
       <Header title="Salary" />
-      <div className="p-6 max-w-6xl mx-auto">
+      <div className="p-6 w-full">
         <div className="flex justify-end mb-4">
           <button onClick={handleAdminLogout} className="px-3 py-1.5 text-sm font-medium text-red-800 bg-red-100 hover:bg-red-200 border border-red-300 rounded-lg">
             Logout (Admin)

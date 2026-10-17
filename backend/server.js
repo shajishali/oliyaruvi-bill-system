@@ -21,6 +21,7 @@ const authRouter = require('./routes/auth');
 const branchesRouter = require('./routes/branches');
 const counterRouter = require('./routes/counter');
 const salaryRouter = require('./routes/salary');
+const suppliersRouter = require('./routes/suppliers');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -28,7 +29,13 @@ const PORT = Number(process.env.PORT || 5000);
 // Middleware
 app.use(cors());
 app.use((req, res, next) => {
-  if (req.method === 'POST' && (req.path === '/api/settings/logo' || req.path === '/api/settings/send-report')) {
+  const largeBody =
+    (req.method === 'POST' || req.method === 'PUT') &&
+    (req.path === '/api/settings/logo' ||
+      req.path === '/api/settings/send-report' ||
+      req.path === '/api/suppliers/bills' ||
+      /^\/api\/suppliers\/bills\/\d+(\/attachment)?$/.test(req.path));
+  if (largeBody) {
     return express.json({ limit: '6mb' })(req, res, next);
   }
   return express.json()(req, res, next);
@@ -92,6 +99,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/branches', branchesRouter);
 app.use('/api/counter', counterRouter);
 app.use('/api/salary', salaryRouter);
+app.use('/api/suppliers', suppliersRouter);
 
 // Serve built frontend when running in Electron (production)
 const isElectron = process.env.ELECTRON_APP === 'true';

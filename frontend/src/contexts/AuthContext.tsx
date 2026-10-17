@@ -1,8 +1,9 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { clearAdminSession } from '../constants/adminAuth';
+import { clearCounterAck } from '../constants/counterAck';
 
 const AUTH_KEY = 'oliyaruvi_auth';
 const USERS_KEY = 'oliyaruvi_users';
-const ADMIN_AUTH_KEY = 'admin_authenticated';
 
 // RFC 5322 simplified - valid email format
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -139,11 +140,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem(AUTH_KEY);
-    try {
-      sessionStorage.removeItem(ADMIN_AUTH_KEY);
-    } catch {
-      /* ignore */
-    }
+    clearAdminSession();
+    clearCounterAck();
     setIsAuthenticated(false);
   };
 

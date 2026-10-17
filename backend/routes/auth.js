@@ -2,9 +2,29 @@ const express = require('express');
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
+const db = require('../config/database');
 
 // Allowed email for OTP reset - set RESET_EMAIL in .env or uses default below
 const ALLOWED_EMAIL = (process.env.RESET_EMAIL || 'oliyaruviprinters@gmail.com').toLowerCase();
+
+function getAuthSmtpFromSettings() {
+  try {
+    const row = db.prepare('SELECT auth_smtp_host, auth_smtp_port, auth_smtp_user, auth_smtp_password, shop_name FROM shop_settings WHERE id = 1').get();
+    if (!row) return null;
+    const user = String(row.auth_smtp_user || '').trim();
+    const pass = String(row.auth_smtp_password || '').replace(/\s+/g, '');
+    if (!user || !pass) return null;
+    return {
+      host: String(row.auth_smtp_host || 'smtp.gmail.com').trim() || 'smtp.gmail.com',
+      port: Number(row.auth_smtp_port || 587) || 587,
+      user,
+      pass,
+      fromName: String(row.shop_name || 'Billing System').trim() || 'Billing System',
+    };
+  } catch {
+    return null;
+  }
+}
 
 function getResendKey() {
   const raw = process.env.RESEND_API_KEY || process.env.RESEND_KEY || process.env.resend_key || process.env.resend_api_key;
@@ -31,24 +51,28 @@ function isConnectionError(err) {
 }
 
 async function sendViaGmail(to, subject, html) {
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailPass = process.env.GMAIL_APP_PWD || process.env.GMAIL_APP_PASSWORD;
+  const fromSettings = getAuthSmtpFromSettings();
+  const gmailUser = fromSettings?.user || process.env.GMAIL_USER;
+  const gmailPass = fromSettings?.pass || process.env.GMAIL_APP_PWD || process.env.GMAIL_APP_PASSWORD;
   if (!gmailUser || !gmailPass) return null;
+  const host = fromSettings?.host || 'smtp.gmail.com';
+  const port = fromSettings?.port || 587;
   const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
-    requireTLS: true,
+    host,
+    port,
+    secure: port === 465,
+    requireTLS: port === 587,
     auth: { user: gmailUser, pass: gmailPass },
     connectionTimeout: 15000,
   });
-  const fromName = process.env.GMAIL_FROM_NAME || 'Oliyaruvi Printers';
+  const fromName = fromSettings?.fromName || process.env.GMAIL_FROM_NAME || 'Billing System';
   await transporter.sendMail({
     from: `"${fromName}" <${gmailUser}>`,
     to,
     subject,
     html,
   });
+  return true;
 }
 
 async function sendViaResend(to, subject, html) {
@@ -96,14 +120,32 @@ router.post('/request-otp', async (req, res) => {
     `;
 
     const resendKey = getResendKey();
-    const hasGmail = process.env.GMAIL_USER && (process.env.GMAIL_APP_PWD || process.env.GMAIL_APP_PASSWORD);
+    const settingsSmtp = getAuthSmtpFromSettings();
+    const hasEnvGmail = process.env.GMAIL_USER && (process.env.GMAIL_APP_PWD || process.env.GMAIL_APP_PASSWORD);
+    const hasGmail = !!(settingsSmtp || hasEnvGmail);
     let sent = false;
     let lastError = null;
     let resendError = null;
     let method = null;
 
-    // Try Resend first when configured (HTTPS, works when Gmail SMTP is blocked)
-    if (resendKey) {
+    // Prefer Settings → System email (forgot password) Gmail first.
+    if (hasGmail) {
+      try {
+        await sendViaGmail(trimmed, subject, html);
+        sent = true;
+        method = 'gmail';
+      } catch (err) {
+        lastError = err;
+        if (isConnectionError(err)) {
+          console.warn('[OTP] Gmail failed:', err.message);
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    // Fallback to Resend when Gmail failed or not configured
+    if (!sent && resendKey) {
       try {
         await sendViaResend(trimmed, subject, html);
         sent = true;
@@ -115,30 +157,14 @@ router.post('/request-otp', async (req, res) => {
       }
     }
 
-    // Fallback to Gmail if Resend failed or not configured
-    if (!sent && hasGmail) {
-      try {
-        await sendViaGmail(trimmed, subject, html);
-        sent = true;
-        method = 'gmail';
-      } catch (err) {
-        lastError = err;
-        if (isConnectionError(err)) {
-          console.warn('[OTP] Gmail blocked, Resend not configured:', err.message);
-        } else {
-          throw err;
-        }
-      }
-    }
-
     if (!sent) {
       if (resendKey && resendError) {
         throw new Error(resendError.message || String(resendError));
       }
       throw new Error(
         lastError && isConnectionError(lastError)
-          ? 'Gmail blocked. Add RESEND_API_KEY or RESEND_KEY to backend/.env (get key at resend.com/api-keys).'
-          : 'Add RESEND_API_KEY or RESEND_KEY to backend/.env. Get key at resend.com/api-keys.'
+          ? 'Gmail blocked. Set System email (forgot password) in Settings, or add RESEND_API_KEY to backend/.env.'
+          : 'Set System email (forgot password) Gmail + app password in Settings, or add RESEND_API_KEY to backend/.env.'
       );
     }
 

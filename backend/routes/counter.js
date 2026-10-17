@@ -84,7 +84,12 @@ router.post('/start', (req, res) => {
     const staff = db.prepare('SELECT * FROM counter_staff WHERE id = ? AND is_active = 1').get(Number(req.body?.staff_id));
     if (!staff) return res.status(400).json({ error: 'Choose a person from the counter list.' });
     const current = openShift();
-    if (current && current.staff_id === staff.id) return res.json({ active: current });
+    const renew = req.body?.renew === true || req.body?.renew === 1 || req.body?.renew === 'true'
+      || req.body?.confirm === true || req.body?.confirm === 1 || req.body?.confirm === 'true';
+    // Same person without renew/confirm → keep existing open shift.
+    if (current && current.staff_id === staff.id && !renew) {
+      return res.json({ active: current, confirmed: false });
+    }
     const now = localStamp();
     const started = db.transaction(() => {
       if (current) db.prepare('UPDATE counter_shifts SET ended_at = ? WHERE id = ?').run(now, current.id);
@@ -94,8 +99,13 @@ router.post('/start', (req, res) => {
       `).run(staff.id, staff.name, now, now.slice(0, 10));
       return db.prepare('SELECT * FROM counter_shifts WHERE id = ?').get(result.lastInsertRowid);
     })();
-    log('counter_started', 'counter_shift', started.id, { staff_name: staff.name, started_at: now });
-    res.status(201).json({ active: started });
+    const samePersonRenew = !!(current && current.staff_id === staff.id && renew);
+    log(samePersonRenew ? 'counter_confirmed' : 'counter_started', 'counter_shift', started.id, {
+      staff_name: staff.name,
+      started_at: now,
+      renew: samePersonRenew,
+    });
+    res.status(201).json({ active: started, confirmed: samePersonRenew });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -130,7 +130,7 @@ export default function StockTable({
 
   const beginRollEdit = (item: StockItem) => {
     void (async () => {
-      if (!(await requestAdminPermission({ force: true }))) return;
+      if (!(await requestAdminPermission())) return;
       openRollEdit(item);
     })();
   };

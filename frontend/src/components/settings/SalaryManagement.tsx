@@ -52,6 +52,7 @@ export default function SalaryManagement() {
   const [monthlyAmount, setMonthlyAmount] = useState('');
   const [monthlyPaidOn, setMonthlyPaidOn] = useState(todayInput);
   const [monthlyNotes, setMonthlyNotes] = useState('');
+  const [monthlyFromCollection, setMonthlyFromCollection] = useState(false);
   const [projectPerson, setProjectPerson] = useState('');
   const [projectName, setProjectName] = useState('');
   const [projectStart, setProjectStart] = useState('');
@@ -59,6 +60,7 @@ export default function SalaryManagement() {
   const [projectAmount, setProjectAmount] = useState('');
   const [projectPaidOn, setProjectPaidOn] = useState(todayInput);
   const [projectNotes, setProjectNotes] = useState('');
+  const [projectFromCollection, setProjectFromCollection] = useState(false);
 
   const load = useCallback(async (nextMonth = month) => {
     const next = await api.salary.month(nextMonth);
@@ -210,9 +212,11 @@ export default function SalaryManagement() {
                 paid_on: monthlyPaidOn,
                 amount: Number(monthlyAmount),
                 notes: monthlyNotes,
+                from_collection: monthlyFromCollection,
               });
               setMonthlyAmount('');
               setMonthlyNotes('');
+              setMonthlyFromCollection(false);
             });
           }}
         >
@@ -228,6 +232,15 @@ export default function SalaryManagement() {
             <input type="date" value={monthlyPaidOn} onChange={(e) => setMonthlyPaidOn(e.target.value)} className={`${fieldClass} mt-1`} required />
           </label>
           <input value={monthlyNotes} onChange={(e) => setMonthlyNotes(e.target.value)} placeholder="Note, optional" className={fieldClass} />
+          <label className="flex items-start gap-2 text-sm text-red-100 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={monthlyFromCollection}
+              onChange={(e) => setMonthlyFromCollection(e.target.checked)}
+              className="mt-0.5 rounded border-red-600"
+            />
+            <span>Take from day collection and add to expenses for the paid-on date. Leave unchecked to skip expenses.</span>
+          </label>
           <button type="submit" disabled={busy || !people.length} className="px-3 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50">Save monthly pay</button>
         </form>
 
@@ -245,12 +258,14 @@ export default function SalaryManagement() {
                 paid_on: projectPaidOn,
                 amount: Number(projectAmount),
                 notes: projectNotes,
+                from_collection: projectFromCollection,
               });
               setProjectName('');
               setProjectStart('');
               setProjectEnd('');
               setProjectAmount('');
               setProjectNotes('');
+              setProjectFromCollection(false);
             });
           }}
         >
@@ -275,6 +290,15 @@ export default function SalaryManagement() {
             <input type="date" value={projectPaidOn} onChange={(e) => setProjectPaidOn(e.target.value)} className={`${fieldClass} mt-1`} required />
           </label>
           <input value={projectNotes} onChange={(e) => setProjectNotes(e.target.value)} placeholder="Note, optional" className={fieldClass} />
+          <label className="flex items-start gap-2 text-sm text-red-100 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={projectFromCollection}
+              onChange={(e) => setProjectFromCollection(e.target.checked)}
+              className="mt-0.5 rounded border-red-600"
+            />
+            <span>Take from day collection and add to expenses for the paid-on date. Leave unchecked to skip expenses.</span>
+          </label>
           <button type="submit" disabled={busy || !people.length} className="px-3 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50">Save project pay</button>
         </form>
       </div>

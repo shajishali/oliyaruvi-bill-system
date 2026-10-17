@@ -628,7 +628,7 @@ export default function Prices() {
   return (
     <>
       <Header title="Prices" />
-      <div className="p-6 max-w-6xl mx-auto">
+      <div className="p-6 w-full">
         {error && (
           <div className="mb-4 p-3 bg-red-950/80 text-red-200 rounded-lg border border-red-900/50" onClick={() => setError('')}>
             {error}

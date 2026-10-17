@@ -609,33 +609,76 @@ router.get('/billable-items', (req, res) => {
         priceAudience: normalizePriceAudience(d.price_audience),
       });
     });
-    framePricing.forEach((f) => {
-      const stockMatch = findStockFrameForPricing(f, stockFrames);
-      const sub = (f.subitem_name && String(f.subitem_name).trim()) ? String(f.subitem_name).trim() : '';
-      const sizeLabel = sub
-        ? `${sub} ${f.size_name}`.trim()
-        : (f.frame_type ? `${f.size_name} - ${f.frame_type}` : f.size_name);
-      const ft = String(f.frame_type || '').trim() || 'Standard';
-      const itemLabel = sub
-        ? `${sub} ${f.size_name} (${ft})`.trim()
-        : `${f.size_name} (${ft})`.trim();
-      const frameGroupKey = `${String(f.subitem_name || '').trim().toLowerCase()}\u001f${String(f.frame_type || '').trim().toLowerCase()}`;
+    // Frames: every stock product (by Type) must appear in billing, section "Frames".
+    // Prefer Settings price when a row matches; otherwise use stock unit_price.
+    stockFrames.forEach((fs) => {
+      const ft = String(fs.frame_type || 'Standard').trim() || 'Standard';
+      const sub = String(fs.subitem_name || '').trim();
+      const frameGroupKey = `${sub.toLowerCase()}\u001f${ft.toLowerCase()}`;
+      const sizeLabel = sub ? `${sub} ${fs.size_name}`.trim() : String(fs.size_name || '').trim();
+      const itemLabel = `${fs.size_name} (${ft})`.trim();
+      const matchedPricing = framePricing.filter((f) => {
+        const m = findStockFrameForPricing(f, stockFrames);
+        return m && m.id === fs.id;
+      });
+      if (matchedPricing.length > 0) {
+        matchedPricing.forEach((f) => {
+          items.push({
+            type: 'frame',
+            name: 'Frame',
+            groupLabel: 'Frames',
+            itemTypeLabel: ft,
+            itemLabel,
+            sizeName: sizeLabel,
+            sizeId: f.id,
+            frameId: fs.id,
+            frameGroupKey,
+            unitPrice: f.unit_price,
+            stockQty: fs.stock_qty ?? 0,
+            calcType: 'fixed',
+            priceAudience: normalizePriceAudience(f.price_audience),
+          });
+        });
+      } else {
+        items.push({
+          type: 'frame',
+          name: 'Frame',
+          groupLabel: 'Frames',
+          itemTypeLabel: ft,
+          itemLabel,
+          sizeName: sizeLabel,
+          sizeId: fs.id,
+          frameId: fs.id,
+          frameGroupKey,
+          unitPrice: parseFloat(fs.unit_price) || 0,
+          stockQty: fs.stock_qty ?? 0,
+          calcType: 'fixed',
+        });
+      }
+    });
+
+    // Photos from Stock Management
+    let photos = [];
+    try {
+      photos = db.prepare('SELECT * FROM photo_sizes ORDER BY size_name').all();
+    } catch (_) {}
+    photos.forEach((p) => {
+      const sn = String(p.size_name || '').trim();
       items.push({
-        type: 'frame',
-        name: 'Frame',
-        groupLabel: 'Frames',
-        itemTypeLabel: ft,
-        itemLabel,
-        sizeName: sizeLabel,
-        sizeId: f.id,
-        frameId: stockMatch ? stockMatch.id : undefined,
-        frameGroupKey,
-        unitPrice: f.unit_price,
-        stockQty: stockMatch != null ? stockMatch.stock_qty : 0,
+        type: 'photo',
+        name: 'Photo',
+        groupLabel: 'Photos',
+        itemTypeLabel: 'Photos',
+        itemLabel: sn || 'Photo',
+        sizeName: p.size_name,
+        sizeId: p.id,
+        photoId: p.id,
+        unitPrice: p.unit_price,
+        stockQty: p.stock_qty,
         calcType: 'fixed',
-        priceAudience: normalizePriceAudience(f.price_audience),
       });
     });
+
     photocopies.forEach((p) => {
       const sn = String(p.size_name || '').trim();
       items.push({

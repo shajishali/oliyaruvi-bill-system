@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
 const { log } = require('../lib/activityLog');
+const { addDailyExpense, wantsFromCollection } = require('../lib/dailyExpense');
 
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -127,17 +128,28 @@ router.post('/payments', (req, res) => {
       if (endedOn < startedOn) return res.status(400).json({ error: 'The end date is before the start date.' });
       payMonth = startedOn.slice(0, 7);
     }
-    const result = db.prepare(`
-      INSERT INTO salary_payments (person_id, person_name, pay_kind, pay_month, project_name, started_on, ended_on, paid_on, amount, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(person.id, person.name, payKind, payMonth, projectName, startedOn, endedOn, paidOn, amount, notes);
-    const created = db.prepare('SELECT * FROM salary_payments WHERE id = ?').get(result.lastInsertRowid);
+    const fromCollection = wantsFromCollection(req.body);
+    let created;
+    db.transaction(() => {
+      const result = db.prepare(`
+        INSERT INTO salary_payments (person_id, person_name, pay_kind, pay_month, project_name, started_on, ended_on, paid_on, amount, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(person.id, person.name, payKind, payMonth, projectName, startedOn, endedOn, paidOn, amount, notes);
+      created = db.prepare('SELECT * FROM salary_payments WHERE id = ?').get(result.lastInsertRowid);
+      if (fromCollection) {
+        const label = payKind === 'monthly'
+          ? `Salary: ${person.name} · monthly ${payMonth}`
+          : `Salary: ${person.name} · project ${projectName}`;
+        addDailyExpense(paidOn, amount, label);
+      }
+    })();
     log('salary_paid', 'salary_payment', created.id, {
       staff_name: person.name,
       pay_kind: payKind,
       amount,
       pay_month: payMonth,
       project_name: projectName,
+      from_collection: fromCollection,
     });
     res.status(201).json(created);
   } catch (err) {

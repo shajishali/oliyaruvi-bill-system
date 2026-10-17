@@ -12,7 +12,7 @@ export default function PageTransition() {
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: -8 }}
         transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="flex-1 flex flex-col min-h-0"
+        className="flex-1 flex flex-col min-h-0 w-full min-w-0"
       >
         <Outlet />
       </motion.div>

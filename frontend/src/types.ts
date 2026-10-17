@@ -116,11 +116,17 @@ export interface ShopSettings {
   address: string;
   contact: string;
   gstin?: string;
+  /** Weekly report sender Gmail (dedicated mailbox). */
   smtp_host?: string;
   smtp_port?: string;
   smtp_user?: string;
   smtp_password?: string;
   report_receiver_email?: string;
+  /** System / forgot-password Gmail (separate from weekly report). */
+  auth_smtp_host?: string;
+  auth_smtp_port?: string;
+  auth_smtp_user?: string;
+  auth_smtp_password?: string;
 }
 
 export interface RevenueReport {
@@ -227,6 +233,71 @@ export interface DailyExpense {
   amount: number;
   description: string | null;
   created_at: string;
+}
+
+export interface Supplier {
+  id: number;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  bill_count?: number;
+  total_spent?: number;
+}
+
+export type SupplierPayMethod = 'Cash' | 'Bank' | 'Card' | 'Credit';
+
+export interface SupplierBill {
+  id: number;
+  supplier_id: number;
+  bill_number: string;
+  bill_date: string;
+  subtotal: number;
+  total: number;
+  amount_paid?: number;
+  balance?: number;
+  payment_method: string;
+  notes?: string | null;
+  supplier_name?: string;
+  supplier_phone?: string | null;
+  item_count?: number;
+  has_attachment?: boolean;
+  attachment_name?: string | null;
+  created_at?: string;
+}
+
+export interface SupplierBillItem {
+  id?: number;
+  bill_id?: number;
+  item_name: string;
+  quantity: number;
+  unit?: string | null;
+  unit_price: number;
+  line_total: number;
+}
+
+export interface SupplierBillPayment {
+  id: number;
+  bill_id: number;
+  amount: number;
+  payment_method: string;
+  paid_on: string;
+  notes?: string | null;
+  created_at?: string;
+}
+
+export interface SupplierBillDetail extends SupplierBill {
+  supplier_address?: string | null;
+  items: SupplierBillItem[];
+  payments?: SupplierBillPayment[];
+}
+
+export interface SupplierDetail extends Supplier {
+  bills: SupplierBill[];
+  total_paid?: number;
 }
 
 export interface DayBookPayment {

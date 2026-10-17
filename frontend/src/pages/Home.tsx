@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth, isValidEmail } from '../contexts/AuthContext';
+import { useShopSettings } from '../contexts/ShopSettingsContext';
+import { clearCounterAck } from '../constants/counterAck';
 import { FORGOT_PASSWORD_EMAIL } from '../constants/adminAuth';
 import { api } from '../api/client';
 import ShopLogo from '../components/ShopLogo';
@@ -10,6 +12,7 @@ type ForgotStep = 'email' | 'otp' | 'password';
 
 export default function Home() {
   const { isAuthenticated, hasUsers, hasUserWithEmail, login, register, resetPassword } = useAuth();
+  const { shopName } = useShopSettings();
   const navigate = useNavigate();
   const [modalView, setModalView] = useState<ModalView>('login');
 
@@ -46,6 +49,7 @@ export default function Home() {
     setLoginSubmitting(true);
     const result = login(loginUsername, loginPassword);
     if (result.success) {
+      clearCounterAck();
       try {
         await api.reports.logActivity('user_login', { username: loginUsername.trim() });
       } catch (_) {}
@@ -174,7 +178,7 @@ export default function Home() {
         <ShopLogo className="h-16 w-auto object-contain drop-shadow" />
       </div>
       <h1 className="text-4xl font-bold text-white mb-1" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5)' }}>
-        OLIYARUVI PRINTERS
+        {shopName}
       </h1>
       <p className="text-white text-lg mb-5 font-medium" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
         Billing & Stock Management

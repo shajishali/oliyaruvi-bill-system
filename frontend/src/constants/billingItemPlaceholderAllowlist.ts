@@ -12,11 +12,23 @@ function normalizeKey(s: string | undefined | null): string {
 function frameLineDisplayLabel(r: BillableItem): string {
   const k = String(r.frameGroupKey || '');
   const sep = k.indexOf('\u001f');
-  const sub = sep >= 0 ? k.slice(0, sep) : k;
-  const ft = sep >= 0 ? k.slice(sep + 1) : '';
+  const sub = sep >= 0 ? k.slice(0, sep) : '';
+  const ft = sep >= 0 ? k.slice(sep + 1) : k;
   const cap = (s: string) =>
-    s ? s.charAt(0).toUpperCase() + (s.length > 1 ? s.slice(1).toLowerCase() : '') : '';
-  return cap(sub.trim()) || cap(ft.trim()) || normalizeLabel(r.itemLabel) || 'Frame';
+    s
+      ? s
+          .split(/\s+/)
+          .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : ''))
+          .join(' ')
+      : '';
+  // Prefer stock Type (frame_type) so every stock product shows under Frames.
+  return (
+    cap(normalizeLabel(r.itemTypeLabel)) ||
+    cap(ft.trim()) ||
+    cap(sub.trim()) ||
+    normalizeLabel(r.itemLabel) ||
+    'Frame'
+  );
 }
 
 function groupForItem(i: BillableItem): string {
@@ -30,6 +42,10 @@ function groupForItem(i: BillableItem): string {
       return 'Sticker';
     case 'frame':
       return 'Frames';
+    case 'photo':
+      return 'Photos';
+    case 'photocopy':
+      return 'Photocopy';
     case 'service':
     case 'service_item':
       return 'Services (no stock)';
@@ -37,10 +53,8 @@ function groupForItem(i: BillableItem): string {
       return 'Design for Banner';
     case 'designforPhoto':
       return 'Design for Photo';
-    case 'photocopy':
-      return 'Photocopy';
     case 'custom':
-      return normalizeLabel(i.name) || 'Custom';
+      return normalizeLabel(i.groupLabel) || normalizeLabel(i.name) || 'Custom';
     default:
       return 'Other';
   }

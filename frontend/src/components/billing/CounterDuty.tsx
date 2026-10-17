@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api/client';
+import { useCounter } from '../../contexts/CounterContext';
 import type { CounterDay, CounterShift } from '../../types';
 
 function todayInput() {
@@ -40,6 +41,7 @@ export default function CounterDuty({
   refreshToken?: number;
   onActiveChange?: (name: string | null) => void;
 }) {
+  const { refreshCounter, openCounterIdentify } = useCounter();
   const [day, setDay] = useState<CounterDay | null>(null);
   const [date, setDate] = useState(todayInput);
   const [name, setName] = useState('');
@@ -74,6 +76,7 @@ export default function CounterDuty({
     try {
       await action();
       await load();
+      await refreshCounter();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -88,7 +91,14 @@ export default function CounterDuty({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold text-white text-sm">Counter</h3>
-          <p className="text-xs text-red-300/70 mt-0.5">One person at a time. Switch the name when the next person takes over.</p>
+          <p className="text-xs text-red-300/70 mt-0.5">One person at a time. The app also asks every 2 hours. Use the header to change manually anytime.</p>
+          <button
+            type="button"
+            onClick={() => openCounterIdentify('manual')}
+            className="mt-1 text-xs text-emerald-300 hover:text-emerald-200"
+          >
+            Confirm / change now
+          </button>
         </div>
         <label className="text-xs text-red-200/80">
           Day

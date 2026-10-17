@@ -1,6 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ADMIN_AUTH_KEY, ADMIN_USERNAME, getAdminPassword } from '../../constants/adminAuth';
+import {
+  ADMIN_USERNAME,
+  getAdminPassword,
+  isAdminSessionActive,
+  markAdminSession,
+} from '../../constants/adminAuth';
 
 type Pending = (ok: boolean) => void;
 
@@ -8,22 +13,22 @@ let pending: Pending | null = null;
 let openDialog: ((open: boolean) => void) | null = null;
 
 export function isAdminSession(): boolean {
-  try {
-    return sessionStorage.getItem(ADMIN_AUTH_KEY) === 'true';
-  } catch {
-    return false;
-  }
+  return isAdminSessionActive();
 }
 
 /** Ask for the admin password every time. Opening Settings does not skip this check. */
 export function requestAdminPermission(_options?: { force?: boolean }): Promise<boolean> {
   return new Promise((resolve) => {
+    if (!openDialog) {
+      resolve(false);
+      return;
+    }
     const previous = pending;
     pending = (ok) => {
       previous?.(ok);
       resolve(ok);
     };
-    openDialog?.(true);
+    openDialog(true);
   });
 }
 
@@ -44,6 +49,11 @@ export function AdminPermissionHost() {
     };
     return () => {
       openDialog = null;
+      if (pending) {
+        const resolve = pending;
+        pending = null;
+        resolve(false);
+      }
     };
   }, []);
 
@@ -65,14 +75,14 @@ export function AdminPermissionHost() {
       setError('Invalid password');
       return;
     }
-    sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
+    markAdminSession();
     finish(true);
   };
 
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-6">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 p-6">
       <div className="max-w-md w-full bg-black/95 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl relative">
         <button
           type="button"

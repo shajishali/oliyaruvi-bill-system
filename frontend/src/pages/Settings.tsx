@@ -7,8 +7,9 @@ import AdminGate from '../components/settings/AdminGate';
 import { api } from '../api/client';
 import ShopLogo from '../components/ShopLogo';
 import type { ShopSettings, ActivityLogEntry } from '../types';
-import { ADMIN_AUTH_KEY, setAdminPassword } from '../constants/adminAuth';
+import { clearAdminSession, setAdminPassword } from '../constants/adminAuth';
 import { useAuth } from '../contexts/AuthContext';
+import { useShopSettings } from '../contexts/ShopSettingsContext';
 import { buildShopReport, downloadShopReport, shopReportBase64, thisWeekRange, viewShopReport } from '../utils/shopReportPdf';
 
 
@@ -29,6 +30,7 @@ const ACTION_LABELS: Record<string, string> = {
   user_registered: 'User Registered',
   user_login: 'User Login',
   counter_started: 'Counter Started',
+  counter_confirmed: 'Counter Confirmed',
   counter_ended: 'Counter Ended',
   counter_staff_added: 'Counter Person Added',
   counter_staff_removed: 'Counter Person Removed',
@@ -58,6 +60,14 @@ const ACTION_LABELS: Record<string, string> = {
   branch_transfer: 'Branch Transfer',
   branch_transfer_edited: 'Transfer Edited',
   branch_transfer_undone: 'Transfer Undone',
+  supplier_created: 'Supplier Company Added',
+  supplier_updated: 'Supplier Company Updated',
+  supplier_deleted: 'Supplier Company Removed',
+  supplier_bill_created: 'Supplier Bill Added',
+  supplier_bill_updated: 'Supplier Bill Updated',
+  supplier_bill_deleted: 'Supplier Bill Removed',
+  supplier_bill_payment: 'Supplier Bill Payment',
+  supplier_bill_attachment: 'Supplier Bill Attachment',
 };
 
 function formatActivityDetails(a: ActivityLogEntry): string {
@@ -95,12 +105,19 @@ function formatActivityDetails(a: ActivityLogEntry): string {
     if (d.pay_month) parts.push(String(d.pay_month));
     if (d.amount != null) parts.push(`Rs.${Number(d.amount).toFixed(2)}`);
   }
+  if (a.action_type?.startsWith('supplier')) {
+    if (d.name) parts.push(String(d.name));
+    if (d.supplier_name) parts.push(String(d.supplier_name));
+    if (d.amount != null) parts.push(`Rs.${Number(d.amount).toFixed(2)}`);
+    if (d.from_collection === true) parts.push('from day collection');
+  }
   return parts.join(' ');
 }
 
 
 export default function Settings() {
   const { listAccounts, setSystemPassword } = useAuth();
+  const { refreshShopSettings } = useShopSettings();
   const [loading, setLoading] = useState(true);
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [reportLoading, setReportLoading] = useState(false);
@@ -119,11 +136,15 @@ export default function Settings() {
     address: '',
     contact: '',
     gstin: '',
-    smtp_host: '',
+    smtp_host: 'smtp.gmail.com',
     smtp_port: '587',
     smtp_user: '',
     smtp_password: '',
     report_receiver_email: '',
+    auth_smtp_host: 'smtp.gmail.com',
+    auth_smtp_port: '587',
+    auth_smtp_user: '',
+    auth_smtp_password: '',
   });
 
   useEffect(() => {
@@ -135,11 +156,15 @@ export default function Settings() {
         address: s.address || '',
         contact: s.contact || '',
         gstin: s.gstin || '',
-        smtp_host: s.smtp_host || '',
+        smtp_host: s.smtp_host || 'smtp.gmail.com',
         smtp_port: s.smtp_port || '587',
         smtp_user: s.smtp_user || '',
         smtp_password: s.smtp_password || '',
         report_receiver_email: s.report_receiver_email || '',
+        auth_smtp_host: s.auth_smtp_host || 'smtp.gmail.com',
+        auth_smtp_port: s.auth_smtp_port || '587',
+        auth_smtp_user: s.auth_smtp_user || '',
+        auth_smtp_password: s.auth_smtp_password || '',
       }))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -182,6 +207,7 @@ export default function Settings() {
     setSaving(true);
     try {
       await api.settings.update(form);
+      await refreshShopSettings();
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
@@ -294,7 +320,7 @@ export default function Settings() {
   };
 
   const handleAdminLogout = () => {
-    sessionStorage.removeItem(ADMIN_AUTH_KEY);
+    clearAdminSession();
     window.location.reload();
   };
 
@@ -365,7 +391,7 @@ export default function Settings() {
         </div>
       )}
       {!loading && <>
-      <div className="p-6 max-w-6xl mx-auto">
+      <div className="p-6 w-full">
         <div className="flex justify-end mb-4">
           <button onClick={handleAdminLogout} className="px-3 py-1.5 text-sm font-medium text-red-800 bg-red-100 hover:bg-red-200 border border-red-300 rounded-lg">
             Logout (Admin)
@@ -549,7 +575,7 @@ export default function Settings() {
         <div className="bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl">
           <h3 className="font-semibold text-white mb-2">Reports</h3>
           <p className="text-sm text-red-300/70 mb-4">
-            View all actions in the billing system by date. Identify what happened in the shop, including any counter staff actions.
+            Day-by-day activity log: bills, stock, prices, expenses, suppliers, salary, counter duty, and settings. For the full weekly PDF used by the owner, use Weekly report email below.
           </p>
           <div className="flex flex-wrap gap-2 items-center mb-4">
             <input
@@ -638,12 +664,96 @@ export default function Settings() {
         </div>
 
         <div className="mt-6 bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl">
+          <h3 className="font-semibold text-white mb-2">System email (forgot password)</h3>
+          <p className="text-sm text-red-300/70 mb-4 max-w-3xl">
+            Use this Gmail only for password reset OTP and other system messages. Do not use the weekly report mailbox here.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+            <div>
+              <label className="block text-sm font-medium text-red-200/90 mb-1">System Gmail</label>
+              <input
+                type="email"
+                value={form.auth_smtp_user || ''}
+                onChange={(e) => setForm((f) => ({ ...f, auth_smtp_user: e.target.value }))}
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                placeholder="system-shop@gmail.com"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-red-200/90 mb-1">System Gmail app password</label>
+              <input
+                type="password"
+                value={form.auth_smtp_password || ''}
+                onChange={(e) => setForm((f) => ({ ...f, auth_smtp_password: e.target.value }))}
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                placeholder="Gmail app password"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-red-200/90 mb-1">SMTP host</label>
+              <input
+                type="text"
+                value={form.auth_smtp_host || ''}
+                onChange={(e) => setForm((f) => ({ ...f, auth_smtp_host: e.target.value }))}
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                placeholder="smtp.gmail.com"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-red-200/90 mb-1">SMTP port</label>
+              <input
+                type="text"
+                value={form.auth_smtp_port || ''}
+                onChange={(e) => setForm((f) => ({ ...f, auth_smtp_port: e.target.value }))}
+                className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                placeholder="587"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleSubmit({ preventDefault() {} } as FormEvent)}
+            className="mt-4 px-6 py-3 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save system email'}
+          </button>
+        </div>
+
+        <div className="mt-6 bg-black/90 backdrop-blur-sm rounded-xl border border-red-950/60 p-6 shadow-xl">
           <h3 className="font-semibold text-white mb-2">Weekly report email</h3>
           <p className="text-sm text-red-300/70 mb-6 max-w-3xl">
-            Enter the Gmail SMTP details. View report and Download report open this week's PDF. Send to mail emails that same PDF. It covers this week's bills, deleted bills, balance payments, new stock, stock changes, price changes, expenses, salary, transfers, and profit.
+            Use a separate Gmail created only for weekly reports. View / Download opens this week’s PDF. Send to mail emails that PDF to the owner.
+            The report includes every change: sales bills, supplier bills & payments, stock, prices, expenses (including from day collection), salary, counter duty, transfers, settings, and profit.
           </p>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-red-200/90 mb-1">Report Gmail (sender)</label>
+                <input
+                  type="email"
+                  value={form.smtp_user || ''}
+                  onChange={(e) => setForm((f) => ({ ...f, smtp_user: e.target.value }))}
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  placeholder="shop-reports@gmail.com"
+                  autoComplete="off"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-red-200/90 mb-1">Report Gmail app password</label>
+                <input
+                  type="password"
+                  value={form.smtp_password || ''}
+                  onChange={(e) => setForm((f) => ({ ...f, smtp_password: e.target.value }))}
+                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
+                  placeholder="Gmail app password"
+                  autoComplete="new-password"
+                />
+              </div>
               <div>
                 <label className="block text-sm font-medium text-red-200/90 mb-1">SMTP host</label>
                 <input
@@ -666,31 +776,9 @@ export default function Settings() {
                   autoComplete="off"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">SMTP email</label>
-                <input
-                  type="email"
-                  value={form.smtp_user || ''}
-                  onChange={(e) => setForm((f) => ({ ...f, smtp_user: e.target.value }))}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-                  placeholder="your-shop@gmail.com"
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-red-200/90 mb-1">SMTP app password</label>
-                <input
-                  type="password"
-                  value={form.smtp_password || ''}
-                  onChange={(e) => setForm((f) => ({ ...f, smtp_password: e.target.value }))}
-                  className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
-                  placeholder="Gmail app password"
-                  autoComplete="new-password"
-                />
-              </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-red-200/90 mb-1">Receiver email</label>
+              <label className="block text-sm font-medium text-red-200/90 mb-1">Owner receiver email</label>
               <input
                 type="email"
                 value={form.report_receiver_email || ''}

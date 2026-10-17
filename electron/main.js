@@ -69,10 +69,15 @@ function createWindow() {
       contextIsolation: true,
     },
     icon: path.join(__dirname, '../frontend/public/logo.ico'),
-    title: 'Oliyaruvi Printers - Billing System',
   });
 
   buildAppMenu();
+
+  // Keep the OS window title in sync with the in-app shop name (document.title).
+  mainWindow.on('page-title-updated', (event, title) => {
+    event.preventDefault();
+    mainWindow.setTitle(title || 'Billing System');
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;

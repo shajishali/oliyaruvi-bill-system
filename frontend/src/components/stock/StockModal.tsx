@@ -33,6 +33,7 @@ export default function StockModal({ type, item, itemType, isRollType = false, o
   const [sizeName, setSizeName] = useState(item?.size_name || '');
   const [frameType, setFrameType] = useState(item?.frame_type || '');
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
   const [action, setAction] = useState<'add' | 'reduce'>('add');
 
   const isEdit = type === 'edit';
@@ -45,10 +46,12 @@ export default function StockModal({ type, item, itemType, isRollType = false, o
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     const qty = parseInt(String(quantity), 10) || 0;
     const nextSize = sizeName.trim();
     if (canRename && !nextSize) return;
     if (qty <= 0 && !canRename) return;
+    setFormError('');
     setSubmitting(true);
     try {
       const txType = isEdit ? action : (type === 'add' ? 'add' : 'reduce');
@@ -60,17 +63,19 @@ export default function StockModal({ type, item, itemType, isRollType = false, o
         ...(canRename && itemType === 'frame' ? { frame_type: frameType.trim() } : {}),
       });
       onClose();
+    } catch (err) {
+      setFormError((err as Error).message || 'Failed to save stock');
     } finally {
       setSubmitting(false);
     }
   };
 
   const modal = (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4">
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200] p-4 animate-[fadeIn_120ms_ease-out]">
       <div
         role="dialog"
         aria-modal="true"
-        className="bg-neutral-950 rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6"
+        className="bg-neutral-950 rounded-xl shadow-xl border border-red-950/60 max-w-md w-full p-6 animate-[scaleIn_140ms_ease-out]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-semibold mb-4 text-white">
@@ -160,11 +165,15 @@ export default function StockModal({ type, item, itemType, isRollType = false, o
               className="w-full border border-red-900/50 rounded-lg px-3 py-2 bg-black/60 text-white placeholder-red-400/50"
             />
           </div>
+          {formError && (
+            <p className="text-sm text-red-400">{formError}</p>
+          )}
           <div className="flex gap-2 justify-end pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70"
+              disabled={submitting}
+              className="px-4 py-2 bg-red-950/60 text-red-200 rounded-lg hover:bg-red-900/70 disabled:opacity-50"
             >
               Cancel
             </button>

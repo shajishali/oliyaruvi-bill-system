@@ -25,6 +25,28 @@ type BillFormLineItem = BillItem & {
 
 const BILL_DRAFT_KEY = 'oliyaruvi_bill_draft';
 
+/** Keep portal dropdowns on-screen and scrollable (fixes cut-off stock lists). */
+function placeDropdown(trigger: DOMRect, minWidth: number, preferredMax = 320) {
+  const gap = 4;
+  const pad = 8;
+  const spaceBelow = window.innerHeight - trigger.bottom - gap - pad;
+  const spaceAbove = trigger.top - gap - pad;
+  const openDown = spaceBelow >= 140 || spaceBelow >= spaceAbove;
+  const maxHeight = Math.max(140, Math.min(preferredMax, openDown ? spaceBelow : spaceAbove));
+  const width = Math.max(trigger.width, minWidth);
+  const left = Math.min(trigger.left, Math.max(pad, window.innerWidth - width - pad));
+  if (openDown) {
+    return { top: trigger.bottom + gap, left, width, maxHeight, bottom: undefined as number | undefined };
+  }
+  return {
+    top: undefined as number | undefined,
+    bottom: window.innerHeight - trigger.top + gap,
+    left,
+    width,
+    maxHeight,
+  };
+}
+
 function foldRepeats(value: string): string {
   return value.toLowerCase().replace(/(.)\1+/g, '$1');
 }
@@ -290,19 +312,38 @@ export default function BillForm({ onBillCreated, onSaved, counterPerson = null,
   }, []);
 
   useLayoutEffect(() => {
-    if (itemDropdownOpen && itemTriggerRef.current) {
-      setItemDropdownRect(itemTriggerRef.current.getBoundingClientRect());
-    } else {
+    if (!itemDropdownOpen || !itemTriggerRef.current) {
       setItemDropdownRect(null);
+      return;
     }
+    const update = () => {
+      if (itemTriggerRef.current) setItemDropdownRect(itemTriggerRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('resize', update);
+    // Capture scroll from nested containers (main page) so the menu stays aligned.
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
   }, [itemDropdownOpen]);
 
   useLayoutEffect(() => {
-    if (sizeDropdownOpen && sizeTriggerRef.current) {
-      setSizeDropdownRect(sizeTriggerRef.current.getBoundingClientRect());
-    } else {
+    if (!sizeDropdownOpen || !sizeTriggerRef.current) {
       setSizeDropdownRect(null);
+      return;
     }
+    const update = () => {
+      if (sizeTriggerRef.current) setSizeDropdownRect(sizeTriggerRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
   }, [sizeDropdownOpen]);
 
   useEffect(() => {
@@ -1336,12 +1377,18 @@ export default function BillForm({ onBillCreated, onSaved, counterPerson = null,
                   createPortal(
                     <ul
                       data-bill-dropdown
-                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl max-h-80 overflow-auto z-[9999]"
-                      style={{
-                        top: itemDropdownRect.bottom + 4,
-                        left: itemDropdownRect.left,
-                        width: Math.max(itemDropdownRect.width, 320),
-                      }}
+                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl overflow-y-scroll overscroll-contain z-[9999]"
+                      onWheel={(e) => e.stopPropagation()}
+                      style={(() => {
+                        const place = placeDropdown(itemDropdownRect, 320, 360);
+                        return {
+                          top: place.top,
+                          bottom: place.bottom,
+                          left: place.left,
+                          width: place.width,
+                          maxHeight: place.maxHeight,
+                        };
+                      })()}
                     >
                       <li className="px-2 py-2 border-b border-red-950/60">
                         <button
@@ -1519,12 +1566,18 @@ export default function BillForm({ onBillCreated, onSaved, counterPerson = null,
                   createPortal(
                     <ul
                       data-bill-dropdown
-                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl z-[9999] min-w-[280px] max-h-48 overflow-auto"
-                      style={{
-                        top: sizeDropdownRect.bottom + 4,
-                        left: sizeDropdownRect.left,
-                        width: Math.max(sizeDropdownRect.width, 280),
-                      }}
+                      className="fixed border border-red-900/50 rounded-lg bg-black/95 shadow-xl z-[9999] min-w-[280px] overflow-y-scroll overscroll-contain"
+                      onWheel={(e) => e.stopPropagation()}
+                      style={(() => {
+                        const place = placeDropdown(sizeDropdownRect, 280, 240);
+                        return {
+                          top: place.top,
+                          bottom: place.bottom,
+                          left: place.left,
+                          width: place.width,
+                          maxHeight: place.maxHeight,
+                        };
+                      })()}
                     >
                       {sizesForItem.map((s) => {
                         const remainingSqft = getRemainingRollAvailableSqft(s);

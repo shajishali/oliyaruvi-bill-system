@@ -28,6 +28,7 @@ interface StockItem {
   stock_qty?: number;
   feet_remaining?: number;
   low_stock_threshold?: number;
+  updated_at?: string;
 }
 
 function rollChoices(rows: StockItem[], typeKey: 'stock_type' | 'item_type'): StockChoice[] {
@@ -59,18 +60,6 @@ function resolveTypedSection(input: string): SectionId | null {
   if (t === 'banner' || t === 'banners') return 'banner';
   if (t === 'sticker' || t === 'stickers') return 'sticker';
   if (t === 'log' || t === 'transaction log' || t === 'transaction') return 'log';
-  return null;
-}
-
-// NOTE: kept for backwards compatibility in older code paths.
-function getCustomStockType(sectionId: string, customLabels: Record<string, string>): 'frame' | 'photo' | 'photocopy' | 'banner' | 'sticker' | null {
-  const label = getSectionLabel(sectionId, customLabels).trim().toLowerCase();
-  if (!label) return null;
-  if (label.includes('banner')) return 'banner';
-  if (label.includes('sticker')) return 'sticker';
-  if (label.includes('frame')) return 'frame';
-  if (label.includes('photocopy') || label.includes('copy')) return 'photocopy';
-  if (label.includes('photo')) return 'photo';
   return null;
 }
 
@@ -376,8 +365,8 @@ export default function StockManagement() {
         }
         setCustomSectionsMeta(metaMap);
         setTransactions(Array.isArray(t) ? t : []);
-        setBannerStock(Array.isArray(bs) ? bs : []);
-        setStickerStock(Array.isArray(ss) ? ss : []);
+        setBannerStock(Array.isArray(bs) ? (bs as StockItem[]) : []);
+        setStickerStock(Array.isArray(ss) ? (ss as StockItem[]) : []);
         let savedSections = true;
         try { savedSections = localStorage.getItem(STOCK_SECTIONS_KEY) != null; } catch { savedSections = true; }
         if (!savedSections) {
@@ -432,7 +421,7 @@ export default function StockManagement() {
 
   const handleEditStock = (item: StockItem, itemType: string, isRollType = false) => {
     void (async () => {
-      if (!(await requestAdminPermission({ force: true }))) return;
+      if (!(await requestAdminPermission())) return;
       setStockModal({ type: 'edit', item, itemType, isRollType });
     })();
   };
@@ -460,19 +449,6 @@ export default function StockManagement() {
     try {
       if (type === 'frame') await api.stock.deleteFrame(item.id);
       else await api.stock.deletePhoto(item.id);
-      fetchData();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const handleRemovePhotocopy = async (item: StockItem) => {
-    if (!(await requestAdminPermission())) return;
-    const name = item.size_name ?? item.material_name ?? '';
-    if (!window.confirm(`Remove this photocopy size (${name})? You can add it again later.`)) return;
-    setError('');
-    try {
-      await api.stock.deletePhotocopy(item.id);
       fetchData();
     } catch (err) {
       setError((err as Error).message);
@@ -615,6 +591,22 @@ export default function StockManagement() {
     }
   };
 
+  const applyStockPatch = (itemType: string, id: number, patch: Partial<StockItem>) => {
+    const mapList = (list: StockItem[]) => list.map((row) => (row.id === id ? { ...row, ...patch } : row));
+    if (itemType === 'frame') setFrames((prev) => mapList(prev));
+    else if (itemType === 'photo') setPhotos((prev) => mapList(prev));
+    else if (itemType === 'photocopy') setPhotocopy((prev) => mapList(prev));
+    else if (itemType === 'banner') setBannerStock((prev) => mapList(prev));
+    else if (itemType === 'sticker') setStickerStock((prev) => mapList(prev));
+    else if (itemType === 'custom') {
+      setCustomBySection((prev) => {
+        const next: Record<string, StockItem[]> = {};
+        for (const key of Object.keys(prev)) next[key] = mapList(prev[key]);
+        return next;
+      });
+    }
+  };
+
   const handleStockModalConfirm = async ({
     quantity,
     reason,
@@ -628,30 +620,60 @@ export default function StockManagement() {
     size_name?: string;
     frame_type?: string;
   }) => {
-    if (!stockModal) return;
-    if (!(await requestAdminPermission())) return;
-    const { type, item, itemType } = stockModal;
+    const modal = stockModal;
+    if (!modal) throw new Error('Stock item is no longer available. Close and try again.');
+    const { type, item, itemType } = modal;
     const txType = transaction_type || (type === 'edit' ? 'add' : type);
+    const nextSize = (size_name ?? '').trim();
+    const nextType = (frame_type ?? item.frame_type ?? '').trim();
+    const renameNeeded =
+      itemType === 'frame' &&
+      !!size_name &&
+      (nextSize !== (item.size_name || '').trim() || nextType !== (item.frame_type || '').trim());
+
     try {
-      if (itemType === 'frame' && size_name) {
-        await api.stock.updateFrame(item.id, {
-          size_name,
-          frame_type: frame_type ?? item.frame_type ?? '',
-        });
+      const jobs: Promise<StockItem>[] = [];
+      if (renameNeeded) {
+        jobs.push(
+          api.stock.updateFrame(item.id, {
+            size_name: nextSize,
+            frame_type: nextType,
+          }) as Promise<StockItem>
+        );
       }
       if (quantity > 0) {
-        await api.stock.addTransaction({
-          item_type: itemType,
-          item_id: item.id,
-          transaction_type: txType,
-          quantity,
-          reason,
-        });
+        jobs.push(
+          api.stock.addTransaction({
+            item_type: itemType,
+            item_id: item.id,
+            transaction_type: txType,
+            quantity,
+            reason,
+          }) as Promise<StockItem>
+        );
       }
-      fetchData();
-      setStockModal(null);
+
+      const results = jobs.length ? await Promise.all(jobs) : [];
+      const patch: Partial<StockItem> = {};
+      for (const row of results) {
+        if (!row || typeof row !== 'object') continue;
+        if (row.size_name != null) patch.size_name = row.size_name;
+        if (row.frame_type != null) patch.frame_type = row.frame_type;
+        if (row.stock_qty != null) patch.stock_qty = row.stock_qty;
+        if (row.feet_remaining != null) patch.feet_remaining = row.feet_remaining;
+        if (row.updated_at != null) patch.updated_at = row.updated_at;
+      }
+      if (quantity > 0 && patch.stock_qty == null) {
+        const cur = item.stock_qty ?? 0;
+        patch.stock_qty = txType === 'add' ? cur + quantity : Math.max(0, cur - quantity);
+      }
+      if (Object.keys(patch).length) applyStockPatch(itemType, item.id, patch);
+      // Background sync — don't block the modal on a full reload / loading flash
+      void fetchData(true);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message || 'Failed to save stock';
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
     }
   };
 
@@ -665,10 +687,6 @@ export default function StockManagement() {
       .flat()
       .map((it) => [it.id, it.size_name ?? ''] as const)
   );
-
-  // Custom tabs are always backed by `custom_section_stock` (count/roll handled via `customSectionsMeta`).
-  // We intentionally do NOT map custom labels like "photocopy" to built-in stock tables.
-  const activeCustomType = null as null;
 
   return (
     <>

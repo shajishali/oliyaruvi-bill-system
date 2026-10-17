@@ -32,6 +32,9 @@ export function getItemListDisplayLabel(i: BillableItem): string {
   if (i.type === 'frame') {
     return il || name;
   }
+  if (i.type === 'photo') {
+    return il || name;
+  }
   if (i.type === 'photocopy') {
     return il || name;
   }
@@ -95,6 +98,9 @@ export function sameProductGroupForSizePicker(selected: BillableItem, row: Billa
         String((selected as { frameGroupKey?: string }).frameGroupKey || '') ===
         String((row as { frameGroupKey?: string }).frameGroupKey || '')
       );
+    case 'photo':
+    case 'photocopy':
+      return true;
     case 'designforBanner':
     case 'designforPhoto':
       return selected.name === row.name;

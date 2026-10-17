@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   ADMIN_USERNAME,
   FORGOT_PASSWORD_EMAIL,
-  ADMIN_AUTH_KEY,
+  isAdminSessionActive,
+  markAdminSession,
   getAdminPassword,
   setAdminPassword,
 } from '../../constants/adminAuth';
@@ -14,13 +15,7 @@ type Step = 'login' | 'forgot_email' | 'forgot_otp' | 'forgot_password';
 
 export default function AdminGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  const [authenticated, setAuthenticated] = useState(() => {
-    try {
-      return sessionStorage.getItem(ADMIN_AUTH_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [authenticated, setAuthenticated] = useState(() => isAdminSessionActive());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -49,7 +44,7 @@ export default function AdminGate({ children }: { children: ReactNode }) {
       return;
     }
     setSubmitting(true);
-    sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
+    markAdminSession();
     setAuthenticated(true);
   };
 
@@ -99,7 +94,7 @@ export default function AdminGate({ children }: { children: ReactNode }) {
     }
     setSubmitting(true);
     setAdminPassword(newPassword);
-    sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
+    markAdminSession();
     setAuthenticated(true);
     setStep('login');
     setForgotEmail('');

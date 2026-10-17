@@ -8,15 +8,28 @@ export function shopLogoUrl(version?: string | number) {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers } as HeadersInit,
-    ...options,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error?: string }).error || res.statusText);
+  const controller = new AbortController();
+  const timeoutMs = 20000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      headers: { 'Content-Type': 'application/json', ...options.headers } as HeadersInit,
+      ...options,
+      signal: options.signal ?? controller.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error((err as { error?: string }).error || res.statusText);
+    }
+    return res.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timed out. Check that the server is running and try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 export const api = {
@@ -48,8 +61,11 @@ export const api = {
       request<import('../types').CounterStaff>('/counter/staff', { method: 'POST', body: JSON.stringify({ name }) }),
     removeStaff: (id: number) =>
       request<{ success: boolean }>(`/counter/staff/${id}`, { method: 'DELETE' }),
-    start: (staffId: number) =>
-      request<{ active: import('../types').CounterShift }>('/counter/start', { method: 'POST', body: JSON.stringify({ staff_id: staffId }) }),
+    start: (staffId: number, opts?: { renew?: boolean; confirm?: boolean }) =>
+      request<{ active: import('../types').CounterShift; confirmed?: boolean }>('/counter/start', {
+        method: 'POST',
+        body: JSON.stringify({ staff_id: staffId, renew: opts?.renew, confirm: opts?.confirm }),
+      }),
     end: () =>
       request<{ active: null }>('/counter/end', { method: 'POST', body: JSON.stringify({}) }),
   },
@@ -168,9 +184,82 @@ export const api = {
       paid_on: string;
       amount: number;
       notes?: string;
+      from_collection?: boolean;
     }) => request<import('../types').SalaryPayment>('/salary/payments', { method: 'POST', body: JSON.stringify(data) }),
     deletePayment: (id: number) =>
       request<{ success: boolean }>(`/salary/payments/${id}`, { method: 'DELETE' }),
+  },
+  suppliers: {
+    list: (q?: string) =>
+      request<import('../types').Supplier[]>(`/suppliers${q ? '?q=' + encodeURIComponent(q) : ''}`),
+    get: (id: number) => request<import('../types').SupplierDetail>(`/suppliers/${id}`),
+    create: (data: { name: string; phone?: string | null; email?: string | null; address?: string | null; notes?: string | null }) =>
+      request<import('../types').Supplier>('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: { name?: string; phone?: string | null; email?: string | null; address?: string | null; notes?: string | null }) =>
+      request<import('../types').Supplier>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) => request<{ success: boolean }>(`/suppliers/${id}`, { method: 'DELETE' }),
+    bills: (params?: { date?: string; from?: string; to?: string; supplier_id?: string; q?: string }) =>
+      request<import('../types').SupplierBill[]>(
+        `/suppliers/bills/list${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`
+      ),
+    getBill: (id: number) => request<import('../types').SupplierBillDetail>(`/suppliers/bills/${id}`),
+    createBill: (data: {
+      supplier_id: number;
+      bill_date?: string;
+      bill_number?: string;
+      payment_method?: import('../types').SupplierPayMethod;
+      amount_paid?: number;
+      notes?: string | null;
+      total?: number;
+      from_collection?: boolean;
+      items: { item_name: string; quantity: number; unit?: string; unit_price: number }[];
+      attachment_data?: string;
+      attachment_name?: string;
+      mime?: string;
+    }) => request<import('../types').SupplierBillDetail>('/suppliers/bills', { method: 'POST', body: JSON.stringify(data) }),
+    updateBill: (
+      id: number,
+      data: {
+        supplier_id?: number;
+        bill_date?: string;
+        bill_number?: string;
+        payment_method?: import('../types').SupplierPayMethod;
+        amount_paid?: number;
+        notes?: string | null;
+        total?: number;
+        items?: { item_name: string; quantity: number; unit?: string; unit_price: number }[];
+        attachment_data?: string;
+        attachment_name?: string;
+        mime?: string;
+      }
+    ) => request<import('../types').SupplierBillDetail>(`/suppliers/bills/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deleteBill: (id: number) => request<{ success: boolean }>(`/suppliers/bills/${id}`, { method: 'DELETE' }),
+    payBill: (
+      id: number,
+      data: {
+        amount: number;
+        payment_method: import('../types').SupplierPayMethod;
+        paid_on?: string;
+        notes?: string | null;
+        from_collection?: boolean;
+      }
+    ) =>
+      request<import('../types').SupplierBillDetail>(`/suppliers/bills/${id}/payments`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    uploadBillAttachment: (id: number, data: { data: string; file_name?: string; mime?: string }) =>
+      request<import('../types').SupplierBillDetail>(`/suppliers/bills/${id}/attachment`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    billAttachmentUrl: (id: number) => {
+      const base =
+        typeof window !== 'undefined' && window.location?.protocol === 'file:'
+          ? `http://127.0.0.1:${new URLSearchParams(window.location.search).get('apiPort')}/api`
+          : '/api';
+      return `${base}/suppliers/bills/${id}/attachment`;
+    },
   },
   expenses: {
     list: (params?: { date?: string; from?: string; to?: string }) =>
