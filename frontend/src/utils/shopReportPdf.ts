@@ -55,6 +55,9 @@ const ACTION_LABELS: Record<string, string> = {
   supplier_bill_attachment: 'Supplier Bill Attachment',
   expense_added: 'Expense Added',
   settings_updated: 'Settings Updated',
+  program_created: 'Program Added',
+  program_updated: 'Program Updated',
+  program_deleted: 'Program Removed',
 };
 
 function money(value: number) {
@@ -130,6 +133,11 @@ function reportDetail(entry: ActivityLogEntry): string {
   if (details.from_collection === true) bits.push('from day collection');
   if (details.shop_name) bits.push(`shop ${details.shop_name}`);
   if (details.branch_name) bits.push(`branch ${details.branch_name}`);
+  if (details.program_type) bits.push(String(details.program_type));
+  if (details.customer_name) bits.push(String(details.customer_name));
+  if (details.event_date) bits.push(String(details.event_date));
+  if (details.location) bits.push(String(details.location));
+  if (details.phone) bits.push(String(details.phone));
   if (details.rows_removed != null) bits.push(`${details.rows_removed} rows`);
   if (details.updates && typeof details.updates === 'object') {
     const updates = details.updates as Record<string, unknown>;
@@ -241,9 +249,10 @@ export async function buildShopReport(from: string, to: string) {
     'supplier_bill_payment', 'supplier_bill_attachment'
   );
   const settingsChanges = ofType('settings_updated');
+  const programs = ofType('program_created', 'program_updated', 'program_deleted');
   const used = new Set([
     ...deletedBills, ...balancePayments, ...editedBills, ...newStock, ...stockChanges, ...priceChanges,
-    ...transfers, ...salary, ...counter, ...expenseChanges, ...suppliers, ...settingsChanges,
+    ...transfers, ...salary, ...counter, ...expenseChanges, ...suppliers, ...settingsChanges, ...programs,
   ].map((entry) => entry.id));
   const skipped = new Set(['user_login', 'user_registered', 'password_changed', 'bill_created']);
   const other = activities.filter((entry) => !used.has(entry.id) && !skipped.has(entry.action_type));
@@ -348,6 +357,7 @@ export async function buildShopReport(from: string, to: string) {
   paint('Salary', ['When', 'What', 'Details'], activityRows(salary));
   paint('Counter duty', ['When', 'What', 'Details'], activityRows(counter));
   paint('Shop settings changes', ['When', 'What', 'Details'], activityRows(settingsChanges));
+  paint('Calendar programs', ['When', 'What', 'Details'], activityRows(programs));
   paint('Other changes', ['When', 'What', 'Details'], activityRows(other));
 
   const stockRows = [

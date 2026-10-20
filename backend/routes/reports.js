@@ -6,6 +6,32 @@ const { log } = require('../lib/activityLog');
 const ALLOWED_LOG_ACTIONS = ['password_changed', 'user_registered', 'user_login'];
 
 // Helper: get actual received (income) for a date, including fallback for bills missing in payment_transactions
+function getCollectionAddsForDate(date) {
+  try {
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as amt
+      FROM daily_collection_adds
+      WHERE add_date = ?
+    `).get(date);
+    return Number(row?.amt) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function getCollectionAddsForDateRange(from, to) {
+  try {
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as amt
+      FROM daily_collection_adds
+      WHERE add_date >= ? AND add_date <= ?
+    `).get(from, to);
+    return Number(row?.amt) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
 function getActualReceivedForDate(date) {
   let byCash = 0;
   let byBank = 0;
@@ -43,6 +69,8 @@ function getActualReceivedForDate(date) {
       else byCash += missing;
     }
   }
+  // Notes / advances put into the day collection (counted as Cash)
+  byCash += getCollectionAddsForDate(date);
   return { byCash, byBank, total: byCash + byBank };
 }
 
@@ -74,6 +102,7 @@ function getActualReceivedForDateRange(from, to) {
     const missing = (b.amount_paid || 0) - txSum;
     if (missing > 0) total += missing;
   }
+  total += getCollectionAddsForDateRange(from, to);
   return total;
 }
 
@@ -258,6 +287,11 @@ function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+function cleanDayBookText(value) {
+  const s = String(value || '').trim();
+  return s || '';
+}
+
 function showBookDate(value) {
   const [year, month, day] = String(value || '').split('-');
   return day && month && year ? `${day}/${month}/${year}` : value;
@@ -359,6 +393,13 @@ router.get('/day-book', (req, res) => {
       }
     }
     for (const expense of expenses) ensureDay(expense.expense_date).expenses = roundMoney(ensureDay(expense.expense_date).expenses + (expense.amount || 0));
+    try {
+      const adds = db.prepare('SELECT add_date, amount FROM daily_collection_adds').all();
+      for (const add of adds) {
+        const day = ensureDay(add.add_date);
+        day.cash = roundMoney(day.cash + (add.amount || 0));
+      }
+    } catch (_) { /* table may not exist yet */ }
 
     const orders = bills.filter((bill) => bill.bill_date === date).map((bill) => {
       const onDate = bill.payments.filter((payment) => payment.paid_at === bill.bill_date);
@@ -389,7 +430,37 @@ router.get('/day-book', (req, res) => {
       payment_type: payment.payment_type,
       paid_at: payment.paid_at,
       reason: payment.reason,
+      source: 'bill',
     })));
+
+    // Notes → money in with “change day collection” (advances, etc.)
+    try {
+      const adds = db.prepare(`
+        SELECT a.id, a.add_date, a.amount, a.description, a.note_id,
+               n.title AS note_title, n.body AS note_body
+        FROM daily_collection_adds a
+        LEFT JOIN shop_notes n ON n.id = a.note_id
+        WHERE a.add_date = ?
+        ORDER BY a.id
+      `).all(date);
+      for (const add of adds) {
+        const label = cleanDayBookText(add.note_title) || cleanDayBookText(add.description) || 'Collection add';
+        const detail = cleanDayBookText(add.note_body) || cleanDayBookText(add.description) || 'Added from Notes to day collection';
+        received.push({
+          bill_number: add.note_id ? `NOTE-${add.note_id}` : `ADD-${add.id}`,
+          bill_date: add.add_date,
+          customer_name: label,
+          customer_phone: null,
+          amount: roundMoney(add.amount),
+          payment_method: 'Cash',
+          payment_type: 'note_collection',
+          paid_at: add.add_date,
+          reason: detail,
+          source: 'note',
+        });
+      }
+    } catch (_) { /* table may not exist yet */ }
+
     const dayExpenses = expenses.filter((expense) => expense.expense_date === date).map((expense) => ({
       ...expense,
       amount: roundMoney(expense.amount),

@@ -198,7 +198,9 @@ export default function DayBook() {
 
               <section ref={receivedRef} className="bg-black/95 rounded-xl border border-red-950/60 p-4 shadow-xl">
                 <h3 className="font-semibold text-white mb-1">Money received on {showDate(report.date)}</h3>
-                <p className="text-sm text-red-100 mb-3">Includes a balance paid on this day for an older bill. Click the bill to open it, or the bill date to open that day.</p>
+                <p className="text-sm text-red-100 mb-3">
+                  Bill payments and Notes money put into day collection. Click a bill to open it, or the bill date to open that day.
+                </p>
                 {report.received.length === 0 ? (
                   <p className="text-sm text-red-100">No money received on this day.</p>
                 ) : (
@@ -206,33 +208,44 @@ export default function DayBook() {
                     <table className="w-full border-collapse text-sm">
                       <thead>
                         <tr className="bg-red-950/50">
-                          <th className="text-left p-2 border border-red-950/50 text-red-200">Bill</th>
-                          <th className="text-left p-2 border border-red-950/50 text-red-200">Customer</th>
-                          <th className="text-left p-2 border border-red-950/50 text-red-200">Bill date</th>
+                          <th className="text-left p-2 border border-red-950/50 text-red-200">Ref</th>
+                          <th className="text-left p-2 border border-red-950/50 text-red-200">Name / note</th>
+                          <th className="text-left p-2 border border-red-950/50 text-red-200">Date</th>
                           <th className="text-left p-2 border border-red-950/50 text-red-200">Method</th>
                           <th className="text-right p-2 border border-red-950/50 text-red-200">Amount</th>
                           <th className="text-left p-2 border border-red-950/50 text-red-200">Reason</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {report.received.map((payment, index) => (
-                          <tr key={index} id={`daybook-received-${payment.bill_number}`} className={`border-b border-red-950/40 ${focusBill === payment.bill_number ? 'bg-amber-950/30' : ''}`}>
-                            <td className="p-2 border border-red-950/40">
-                              <button type="button" onClick={() => openBill(payment.bill_number)} className="text-white font-medium underline decoration-amber-300 underline-offset-2 hover:text-amber-200 whitespace-nowrap">
-                                {openingBill === payment.bill_number ? 'Opening...' : payment.bill_number}
-                              </button>
-                            </td>
-                            <td className="p-2 border border-red-950/40 text-white">{payment.customer_name}</td>
-                            <td className="p-2 border border-red-950/40">
-                              <button type="button" onClick={() => goToDay(payment.bill_date, 'orders', payment.bill_number)} className="text-white underline decoration-amber-300 underline-offset-2 hover:text-amber-200 whitespace-nowrap">
-                                {showDate(payment.bill_date)}
-                              </button>
-                            </td>
-                            <td className="p-2 border border-red-950/40 text-red-100">{payment.payment_method}</td>
-                            <td className="p-2 border border-red-950/40 text-right text-white whitespace-nowrap">{money(payment.amount)}</td>
-                            <td className="p-2 border border-red-950/40 text-sm text-red-100">{payment.reason}</td>
-                          </tr>
-                        ))}
+                        {report.received.map((payment, index) => {
+                          const fromNote = payment.source === 'note' || payment.payment_type === 'note_collection';
+                          return (
+                            <tr key={index} id={`daybook-received-${payment.bill_number}`} className={`border-b border-red-950/40 ${focusBill === payment.bill_number ? 'bg-amber-950/30' : ''}`}>
+                              <td className="p-2 border border-red-950/40">
+                                {fromNote ? (
+                                  <span className="text-emerald-300 font-medium whitespace-nowrap">Notes</span>
+                                ) : (
+                                  <button type="button" onClick={() => openBill(payment.bill_number)} className="text-white font-medium underline decoration-amber-300 underline-offset-2 hover:text-amber-200 whitespace-nowrap">
+                                    {openingBill === payment.bill_number ? 'Opening...' : payment.bill_number}
+                                  </button>
+                                )}
+                              </td>
+                              <td className="p-2 border border-red-950/40 text-white">{payment.customer_name}</td>
+                              <td className="p-2 border border-red-950/40">
+                                {fromNote ? (
+                                  <span className="text-white whitespace-nowrap">{showDate(payment.bill_date)}</span>
+                                ) : (
+                                  <button type="button" onClick={() => goToDay(payment.bill_date, 'orders', payment.bill_number)} className="text-white underline decoration-amber-300 underline-offset-2 hover:text-amber-200 whitespace-nowrap">
+                                    {showDate(payment.bill_date)}
+                                  </button>
+                                )}
+                              </td>
+                              <td className="p-2 border border-red-950/40 text-red-100">{payment.payment_method}</td>
+                              <td className="p-2 border border-red-950/40 text-right text-white whitespace-nowrap">{money(payment.amount)}</td>
+                              <td className="p-2 border border-red-950/40 text-sm text-red-100">{payment.reason}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

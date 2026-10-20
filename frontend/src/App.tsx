@@ -13,6 +13,9 @@ import Notifications from './pages/Notifications';
 import DayBook from './pages/DayBook';
 import Salary from './pages/Salary';
 import Suppliers from './pages/Suppliers';
+import Calendar from './pages/Calendar';
+import BranchWork from './pages/BranchWork';
+import Notes from './pages/Notes';
 
 export default function App() {
   return (
@@ -34,8 +37,11 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="billing" element={<Billing />} />
         <Route path="day-book" element={<DayBook />} />
+        <Route path="calendar" element={<Calendar />} />
         <Route path="stock" element={<StockManagement />} />
         <Route path="suppliers" element={<Suppliers />} />
+        <Route path="branch-accounts" element={<BranchWork />} />
+        <Route path="notes" element={<Notes />} />
         <Route path="prices" element={<Prices />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="salary" element={<Salary />} />

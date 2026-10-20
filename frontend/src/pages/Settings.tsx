@@ -60,6 +60,16 @@ const ACTION_LABELS: Record<string, string> = {
   branch_transfer: 'Branch Transfer',
   branch_transfer_edited: 'Transfer Edited',
   branch_transfer_undone: 'Transfer Undone',
+  branch_work_created: 'Branch Work Added',
+  branch_work_updated: 'Branch Work Updated',
+  branch_work_settled: 'Branch Work Settled',
+  branch_work_settled_batch: 'Branch Work Settled (batch)',
+  branch_work_reopened: 'Branch Work Reopened',
+  branch_work_deleted: 'Branch Work Removed',
+  shop_note_created: 'Note Added',
+  shop_note_updated: 'Note Updated',
+  shop_note_deleted: 'Note Removed',
+  collection_add: 'Day Collection Increased',
   supplier_created: 'Supplier Company Added',
   supplier_updated: 'Supplier Company Updated',
   supplier_deleted: 'Supplier Company Removed',
@@ -68,6 +78,9 @@ const ACTION_LABELS: Record<string, string> = {
   supplier_bill_deleted: 'Supplier Bill Removed',
   supplier_bill_payment: 'Supplier Bill Payment',
   supplier_bill_attachment: 'Supplier Bill Attachment',
+  program_created: 'Program Added',
+  program_updated: 'Program Updated',
+  program_deleted: 'Program Removed',
 };
 
 function formatActivityDetails(a: ActivityLogEntry): string {
@@ -110,6 +123,12 @@ function formatActivityDetails(a: ActivityLogEntry): string {
     if (d.supplier_name) parts.push(String(d.supplier_name));
     if (d.amount != null) parts.push(`Rs.${Number(d.amount).toFixed(2)}`);
     if (d.from_collection === true) parts.push('from day collection');
+  }
+  if (a.action_type?.startsWith('program')) {
+    if (d.program_type) parts.push(String(d.program_type));
+    if (d.event_date) parts.push(String(d.event_date));
+    if (d.customer_name) parts.push(String(d.customer_name));
+    if (d.location) parts.push(String(d.location));
   }
   return parts.join(' ');
 }

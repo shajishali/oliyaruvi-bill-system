@@ -175,10 +175,75 @@ export interface BranchTransfer {
   created_at: string;
 }
 
+/** Inter-branch work ledger — not shop income/profit. */
+export type BranchWorkDirection = 'for_them' | 'for_us';
+export type BranchWorkStatus = 'open' | 'settled';
+
+export interface BranchWorkEntry {
+  id: number;
+  work_date: string;
+  direction: BranchWorkDirection;
+  branch_id: number | null;
+  branch_name: string;
+  description: string;
+  amount: number;
+  status: BranchWorkStatus;
+  settled_on?: string | null;
+  settlement_note?: string;
+  note?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface BranchWorkBranchSummary {
+  branch_name: string;
+  they_owe_us: number;
+  we_owe_them: number;
+  net: number;
+  open_count: number;
+}
+
+export interface BranchWorkSummary {
+  they_owe_us: number;
+  we_owe_them: number;
+  net: number;
+  open_count: number;
+  branches: BranchWorkBranchSummary[];
+}
+
+export interface BranchWorkMonth {
+  from: string;
+  to: string;
+  entries: BranchWorkEntry[];
+  summary: BranchWorkSummary;
+}
+
+export type ShopNoteType = 'plain' | 'reminder' | 'money';
+export type ShopNoteMoneyDirection = 'in' | 'out';
+
+export interface ShopNote {
+  id: number;
+  note_type: ShopNoteType;
+  title: string;
+  body: string;
+  remind_on?: string | null;
+  money_direction?: ShopNoteMoneyDirection | null;
+  amount?: number | null;
+  affect_collection?: number | boolean;
+  collection_date?: string | null;
+  expense_id?: number | null;
+  collection_add_id?: number | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Notification {
   id: number;
+  type?: string;
   title: string;
   message?: string;
+  is_read?: number | boolean;
+  created_at?: string;
 }
 
 export interface ActivityLogEntry {
@@ -310,6 +375,8 @@ export interface DayBookPayment {
   payment_type: string;
   paid_at: string;
   reason: string;
+  /** bill = order payment; note = Notes collection add */
+  source?: 'bill' | 'note' | string;
 }
 
 export interface DayBookOrder {
@@ -371,4 +438,36 @@ export interface FinalRevenueReport {
   income: number;
   outcome: number;
   finalRevenue: number;
+}
+
+export interface ProgramHistoryChange {
+  field: string;
+  from: string | null;
+  to: string | null;
+}
+
+export interface ProgramHistoryEntry {
+  id: number;
+  program_id: number;
+  changed_at: string;
+  summary: string;
+  changes: ProgramHistoryChange[];
+  program_type?: string | null;
+}
+
+export interface Program {
+  id: number;
+  program_type: string;
+  location: string | null;
+  customer_id: number | null;
+  customer_name: string;
+  phone: string | null;
+  event_date: string;
+  end_date: string;
+  event_time: string | null;
+  end_time: string | null;
+  notes: string | null;
+  created_at?: string;
+  updated_at?: string;
+  history?: ProgramHistoryEntry[];
 }

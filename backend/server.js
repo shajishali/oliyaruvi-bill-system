@@ -22,6 +22,9 @@ const branchesRouter = require('./routes/branches');
 const counterRouter = require('./routes/counter');
 const salaryRouter = require('./routes/salary');
 const suppliersRouter = require('./routes/suppliers');
+const programsRouter = require('./routes/programs');
+const branchWorkRouter = require('./routes/branchWork');
+const notesRouter = require('./routes/notes');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -100,6 +103,9 @@ app.use('/api/branches', branchesRouter);
 app.use('/api/counter', counterRouter);
 app.use('/api/salary', salaryRouter);
 app.use('/api/suppliers', suppliersRouter);
+app.use('/api/programs', programsRouter);
+app.use('/api/branch-work', branchWorkRouter);
+app.use('/api/notes', notesRouter);
 
 // Serve built frontend when running in Electron (production)
 const isElectron = process.env.ELECTRON_APP === 'true';

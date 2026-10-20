@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { LowStockItem, Notification } from '../../types';
@@ -9,7 +9,16 @@ export default function NotificationToast() {
   const [count, setCount] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [show, setShow] = useState(false);
-  const [shown, setShown] = useState(false);
+  const prevCount = useRef(0);
+  const primed = useRef(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onNotificationsPage = location.pathname.startsWith('/app/notifications');
+
+  const flash = () => {
+    setShow(true);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setShow(false), 8000);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -29,59 +38,65 @@ export default function NotificationToast() {
           ? lowStock.value.filter((item) => !isLowStockRead(item)).length
           : 0;
 
+      const next = notifLen + lowLen;
       setLowStockCount(lowLen);
-      setCount(notifLen + lowLen);
+      setCount(next);
+
+      const onNotifs = location.pathname.startsWith('/app/notifications');
+      if (!primed.current) {
+        primed.current = true;
+        prevCount.current = next;
+        // Show once on app load if there are unread items
+        if (next > 0 && !onNotifs) flash();
+      } else {
+        const increased = next > prevCount.current;
+        prevCount.current = next;
+        if (next > 0 && increased && !onNotifs) flash();
+      }
+      if (next === 0) setShow(false);
     };
 
     fetchCounts().catch(() => {});
     const interval = setInterval(() => {
       fetchCounts().catch(() => {});
-    }, 60000);
-    const onRead = () => {
+    }, 15000);
+    const onChanged = () => {
       fetchCounts().catch(() => {});
     };
-    window.addEventListener('oliyaruvi-low-stock-read', onRead);
+    window.addEventListener('oliyaruvi-low-stock-read', onChanged);
+    window.addEventListener('oliyaruvi-notifications-changed', onChanged);
     return () => {
       mounted = false;
       clearInterval(interval);
-      window.removeEventListener('oliyaruvi-low-stock-read', onRead);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      window.removeEventListener('oliyaruvi-low-stock-read', onChanged);
+      window.removeEventListener('oliyaruvi-notifications-changed', onChanged);
     };
-  }, []);
-
-  useEffect(() => {
-    // Only show a new toast when we transition from "none" to "some".
-    if (count === 0) setShown(false);
-
-    if (count > 0 && !shown) {
-      setShow(true);
-      setShown(true);
-      const t = setTimeout(() => setShow(false), 4000);
-      return () => clearTimeout(t);
-    }
-  }, [count, shown]);
-
-  useEffect(() => {
-    // If user is already viewing notifications, hide the toast immediately.
-    if (location.pathname.startsWith('/app/notifications')) {
-      setShow(false);
-      // Prevent it from re-showing right away when count is still > 0.
-      setShown(true);
-    }
   }, [location.pathname]);
 
-  if (!show || count === 0) return null;
+  useEffect(() => {
+    if (onNotificationsPage) {
+      setShow(false);
+      return;
+    }
+    // When leaving Notifications with unread still present, show toast again
+    if (count > 0) flash();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onNotificationsPage]);
+
+  if (!show || count === 0 || onNotificationsPage) return null;
 
   return (
     <Link
       to="/app/notifications"
-      className="fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg z-[100] max-w-sm cursor-pointer hover:bg-red-700 transition-colors block"
+      className="fixed bottom-5 right-5 bg-red-600 text-white px-4 py-3 rounded-xl shadow-2xl z-[13000] max-w-sm cursor-pointer hover:bg-red-500 transition-colors block border border-red-400/40"
     >
-      <p className="font-medium text-sm">
-        {lowStockCount > 0
+      <p className="font-semibold text-sm">
+        {lowStockCount > 0 && count === lowStockCount
           ? `Low stock: ${lowStockCount} alert${lowStockCount > 1 ? 's' : ''}`
           : `You have ${count} new notification${count > 1 ? 's' : ''}`}
       </p>
-      <p className="text-xs text-red-100 mt-0.5">Click to go to Notifications page</p>
+      <p className="text-xs text-red-100 mt-0.5">Click to open Notifications</p>
     </Link>
   );
 }

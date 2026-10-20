@@ -189,6 +189,50 @@ export const api = {
     deletePayment: (id: number) =>
       request<{ success: boolean }>(`/salary/payments/${id}`, { method: 'DELETE' }),
   },
+  programs: {
+    list: (params?: { month?: string; from?: string; to?: string }) =>
+      request<import('../types').Program[]>(
+        `/programs${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`
+      ),
+    get: (id: number) =>
+      request<import('../types').Program & { history: import('../types').ProgramHistoryEntry[] }>(`/programs/${id}`),
+    history: (id: number) =>
+      request<import('../types').ProgramHistoryEntry[]>(`/programs/${id}/history`),
+    monthHistory: (month: string) =>
+      request<import('../types').ProgramHistoryEntry[]>(`/programs/month-history?month=${encodeURIComponent(month)}`),
+    create: (data: {
+      program_type: string;
+      location?: string | null;
+      customer_id?: number | null;
+      customer_name?: string;
+      phone?: string | null;
+      event_date: string;
+      end_date?: string | null;
+      event_time?: string | null;
+      end_time?: string | null;
+      notes?: string | null;
+    }) => request<import('../types').Program>('/programs', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: {
+        program_type?: string;
+        location?: string | null;
+        customer_id?: number | null;
+        customer_name?: string;
+        phone?: string | null;
+        event_date?: string;
+        end_date?: string | null;
+        event_time?: string | null;
+        end_time?: string | null;
+        notes?: string | null;
+      }
+    ) =>
+      request<import('../types').Program & { history: import('../types').ProgramHistoryEntry[] }>(`/programs/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: number) => request<{ success: boolean }>(`/programs/${id}`, { method: 'DELETE' }),
+  },
   suppliers: {
     list: (q?: string) =>
       request<import('../types').Supplier[]>(`/suppliers${q ? '?q=' + encodeURIComponent(q) : ''}`),
@@ -380,6 +424,76 @@ export const api = {
       request<{ success: boolean; message?: string; method?: 'resend' | 'gmail' }>('/auth/request-otp', { method: 'POST', body: JSON.stringify({ email, appUser: !!appUser }) }),
     verifyOtp: (email: string, otp: string) =>
       request<{ success: boolean; valid: boolean }>('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) }),
+  },
+  notes: {
+    list: (params?: { type?: string; q?: string }) =>
+      request<import('../types').ShopNote[]>(
+        `/notes${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`
+      ),
+    get: (id: number) => request<import('../types').ShopNote>(`/notes/${id}`),
+    create: (data: {
+      note_type: import('../types').ShopNoteType;
+      title?: string;
+      body?: string;
+      remind_on?: string | null;
+      money_direction?: import('../types').ShopNoteMoneyDirection | null;
+      amount?: number | null;
+      affect_collection?: boolean;
+      collection_date?: string | null;
+    }) => request<import('../types').ShopNote>('/notes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: {
+        note_type?: import('../types').ShopNoteType;
+        title?: string;
+        body?: string;
+        remind_on?: string | null;
+        money_direction?: import('../types').ShopNoteMoneyDirection | null;
+        amount?: number | null;
+        affect_collection?: boolean;
+        collection_date?: string | null;
+      }
+    ) => request<import('../types').ShopNote>(`/notes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) => request<{ success: boolean }>(`/notes/${id}`, { method: 'DELETE' }),
+  },
+  branchWork: {
+    list: (params?: { month?: string; from?: string; to?: string; branch?: string; status?: string; q?: string }) =>
+      request<import('../types').BranchWorkMonth>(
+        `/branch-work${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`
+      ),
+    summary: (month?: string) =>
+      request<import('../types').BranchWorkSummary>(
+        `/branch-work/summary${month ? `?month=${encodeURIComponent(month)}` : ''}`
+      ),
+    create: (data: {
+      work_date?: string;
+      direction: import('../types').BranchWorkDirection;
+      branch_id?: number | null;
+      branch_name?: string;
+      description: string;
+      amount: number;
+      note?: string;
+    }) => request<import('../types').BranchWorkEntry>('/branch-work', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: {
+        work_date?: string;
+        direction?: import('../types').BranchWorkDirection;
+        branch_id?: number | null;
+        branch_name?: string;
+        description?: string;
+        amount?: number;
+        note?: string;
+      }
+    ) => request<import('../types').BranchWorkEntry>(`/branch-work/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    settle: (id: number, data?: { settled_on?: string; settlement_note?: string }) =>
+      request<import('../types').BranchWorkEntry>(`/branch-work/${id}/settle`, { method: 'POST', body: JSON.stringify(data || {}) }),
+    settleBranch: (data: { branch_name: string; month?: string; settled_on?: string; settlement_note?: string }) =>
+      request<{ settled: number; branch_name: string }>('/branch-work/settle-branch', { method: 'POST', body: JSON.stringify(data) }),
+    reopen: (id: number) =>
+      request<import('../types').BranchWorkEntry>(`/branch-work/${id}/reopen`, { method: 'POST', body: JSON.stringify({}) }),
+    delete: (id: number) =>
+      request<{ success: boolean }>(`/branch-work/${id}`, { method: 'DELETE' }),
   },
   branches: {
     list: () => request<import('../types').ShopBranch[]>('/branches'),
